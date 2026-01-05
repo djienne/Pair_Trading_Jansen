@@ -30,3 +30,6 @@ output/
 
 # Jupyter checkpoints
 .ipynb_checkpoints/
+
+# Copyrighted materials
+pair_trading_in_practice.pdf
