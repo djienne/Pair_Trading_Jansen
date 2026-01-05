@@ -16,5 +16,11 @@
   "lookback_days": 730,
   "trade_window_months": 6,
   "entry_window_months": 3,
-  "show_plot": true
+  "show_plot": true,
+  "kalman": {
+    "smoother_obs_cov": 1.0,
+    "smoother_trans_cov": 0.05,
+    "hedge_delta": 0.001,
+    "hedge_obs_cov": 2.0
+  }
 }

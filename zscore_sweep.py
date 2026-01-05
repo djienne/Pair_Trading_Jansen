@@ -10,8 +10,10 @@ if BASE_DIR not in sys.path:
 
 from jansen_backtest import backtest_pair, plot_equity
 from utils import (
+    build_results_table,
     load_config,
     make_run_config,
+    print_results_table,
     resolve_path,
     resolve_thresholds,
     ResultTracker,
@@ -62,19 +64,6 @@ def find_best_threshold(
         }
         tracker.update(summary, row["entry_z"])
     return tracker.get_best()
-
-
-# ---------------------------------------------------------------------------
-# Results Reporting
-# ---------------------------------------------------------------------------
-def build_results_table(rows: list[dict]) -> pd.DataFrame:
-    """Build and sort results table by Sharpe ratio."""
-    return pd.DataFrame(rows).sort_values("sharpe", ascending=False)
-
-
-def print_results_table(table: pd.DataFrame) -> None:
-    """Print formatted results table."""
-    print(table.to_string(index=False, float_format=lambda x: f"{x:0.4f}"))
 
 
 # ---------------------------------------------------------------------------

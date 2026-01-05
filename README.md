@@ -15,7 +15,7 @@ This project implements a pairs trading strategy inspired by the "Pairs trading 
 
 ## Example Output
 
-<img src="output/equity_BTC_XRP_z1.0.png" width="700" alt="Equity curve for BTC/XRP (z=1.0)" />
+<img src="output/pair_sweep_summary.png" width="700" alt="Pair sweep summary showing top pairs by Sharpe ratio" />
 ## Scripts
 
 ### 1. `jansen_backtest.py`
@@ -51,16 +51,32 @@ python pair_sweep.py
   - Summary statistics panel
 - `output/equity_{Y}_{X}_z{Z}.png` - Equity curve for the best-performing pair
 
+### 4. `download_data.py`
+Downloads historical klines data from Binance Futures API.
+```powershell
+python download_data.py
+```
+- Reads the `symbols` list from `config.json` and downloads data for each symbol.
+- Supports incremental updates (only fetches new data since last download).
+- Saves data in Feather format to `feather_dir`.
+
+**Override symbols via CLI:**
+```powershell
+python download_data.py --symbols BTCUSDT ETHUSDT BNBUSDT
+```
+
 ## Configuration (`config.json`)
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `data_dir` | Path to directory containing `.feather` price files | `data/feather` |
+| `feather_dir` | Path for `download_data.py` to save downloaded data | `data/feather` |
 | `output_dir` | Path where backtest results and plots are saved | `output` |
 | `interval` | Candle interval (e.g., `1d`) | `1d` |
 | `quote` | Quote currency (e.g., `USDT`) | `USDT` |
-| `symbol_y` | Primary symbol (Lead) | - |
-| `symbol_x` | Secondary symbol (Lag/Hedge) | - |
+| `symbols` | List of symbols to download (e.g., `["BTC", "ETH"]`) | `[]` |
+| `symbol_y` | Primary symbol (Lead) for single-pair backtest | - |
+| `symbol_x` | Secondary symbol (Lag/Hedge) for single-pair backtest | - |
 | `start_equity` | Initial capital | `1000.0` |
 | `entry_z` | Z-score threshold for entering a trade | `2.0` |
 | `risk_limit` | Stop-loss trigger as spread return (e.g., `-0.2` = -20%) | `-0.2` |
@@ -72,13 +88,19 @@ python pair_sweep.py
 | `trade_window_months` | Months traded after each quarterly test end | `6` |
 | `entry_window_months` | Months within trading window where entries are allowed | `3` |
 | `show_plot` | Toggle display of equity curve window | `true` |
+| `binance_base_url` | Binance API base URL for data download | `https://fapi.binance.com` |
+| `max_klines_per_request` | Max candles per API request | `1500` |
+| `kalman.smoother_obs_cov` | Kalman smoother observation covariance | `1.0` |
+| `kalman.smoother_trans_cov` | Kalman smoother transition covariance | `0.05` |
+| `kalman.hedge_delta` | Kalman hedge ratio delta parameter | `0.001` |
+| `kalman.hedge_obs_cov` | Kalman hedge ratio observation covariance | `2.0` |
 
 ## Installation
 
 Ensure you have the following dependencies installed:
 
 ```powershell
-pip install pandas numpy pykalman matplotlib pyarrow
+pip install pandas numpy pykalman matplotlib pyarrow requests
 ```
 
 The data files should be in Feather format with a `close` price column and an `open_time_dt` datetime column.
@@ -100,6 +122,7 @@ Jansen_method/
 ├── utils.py                # Shared utilities and helpers
 ├── pair_sweep.py           # Brute-force pair ranking
 ├── zscore_sweep.py         # Z-score threshold optimization
+├── download_data.py        # Binance data downloader
 ├── config.json             # Configuration file
 ├── tests/
 │   └── test_backtest_logic.py

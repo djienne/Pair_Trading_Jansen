@@ -179,6 +179,22 @@ class ResultTracker:
         return self.best_result.to_dict() if self.best_result else None
 
 
+# ---------------------------------------------------------------------------
+# Results Reporting
+# ---------------------------------------------------------------------------
+def build_results_table(rows: list[dict]) -> pd.DataFrame:
+    """Build and sort results table by Sharpe ratio."""
+    return pd.DataFrame(rows).sort_values("sharpe", ascending=False)
+
+
+def print_results_table(table: pd.DataFrame) -> None:
+    """Print formatted results table."""
+    print(table.to_string(index=False, float_format=lambda x: f"{x:0.4f}"))
+
+
+# ---------------------------------------------------------------------------
+# Caching Helpers
+# ---------------------------------------------------------------------------
 def compute_signature(config: dict, paths: list[str]) -> str:
     payload = {
         "config": config,

@@ -14,6 +14,7 @@ if BASE_DIR not in sys.path:
 
 from jansen_backtest import backtest_pair, plot_equity
 from utils import (
+    build_results_table,
     compute_signature,
     get_cache_path,
     get_data_path,
@@ -21,6 +22,7 @@ from utils import (
     list_symbols,
     load_config,
     make_run_config,
+    print_results_table,
     resolve_path,
     resolve_thresholds,
     ResultTracker,
@@ -152,19 +154,6 @@ def load_best_results(
     return backtest_pair(best_config, save_output=False)
 
 
-# ---------------------------------------------------------------------------
-# Results Reporting
-# ---------------------------------------------------------------------------
-def build_results_table(rows: list[dict]) -> pd.DataFrame:
-    """Build and sort results table by Sharpe ratio."""
-    return pd.DataFrame(rows).sort_values("sharpe", ascending=False)
-
-
-def print_results_table(table: pd.DataFrame) -> None:
-    """Print formatted results table."""
-    print(table.to_string(index=False, float_format=lambda x: f"{x:0.4f}"))
-
-
 def save_results_csv(table: pd.DataFrame, output_dir: str) -> str:
     """Save ranked results to CSV file."""
     os.makedirs(output_dir, exist_ok=True)
@@ -177,70 +166,49 @@ def save_results_csv(table: pd.DataFrame, output_dir: str) -> str:
 # ---------------------------------------------------------------------------
 # Summary Visualizations
 # ---------------------------------------------------------------------------
-def plot_summary(table: pd.DataFrame, output_dir: str, top_n: int = 15) -> None:
-    """Generate summary visualization plots for pair sweep results."""
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Filter valid results (non-null Sharpe)
-    valid = table.dropna(subset=["sharpe"]).copy()
-    if valid.empty:
-        print("No valid results to plot.")
-        return
-
-    # Create pair labels
-    valid["pair"] = valid["symbol_y"] + "/" + valid["symbol_x"]
-
-    # Setup figure with subplots
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle("Pair Sweep Summary", fontsize=14, fontweight="bold")
-
-    # 1. Top N pairs by Sharpe ratio (horizontal bar chart)
-    ax1 = axes[0, 0]
+def _plot_top_pairs_chart(ax, valid: pd.DataFrame, top_n: int) -> None:
+    """Plot horizontal bar chart of top pairs by Sharpe ratio."""
     top_pairs = valid.nlargest(top_n, "sharpe")
     colors = ["#2ecc71" if s > 0 else "#e74c3c" for s in top_pairs["sharpe"]]
-    bars = ax1.barh(top_pairs["pair"], top_pairs["sharpe"], color=colors)
-    ax1.set_xlabel("Sharpe Ratio")
-    ax1.set_title(f"Top {len(top_pairs)} Pairs by Sharpe Ratio")
-    ax1.axvline(x=0, color="black", linewidth=0.5)
-    ax1.invert_yaxis()
-    # Add value labels
+    bars = ax.barh(top_pairs["pair"], top_pairs["sharpe"], color=colors)
+    ax.set_xlabel("Sharpe Ratio")
+    ax.set_title(f"Top {len(top_pairs)} Pairs by Sharpe Ratio")
+    ax.axvline(x=0, color="black", linewidth=0.5)
+    ax.invert_yaxis()
     for bar, val in zip(bars, top_pairs["sharpe"]):
-        ax1.text(val + 0.02, bar.get_y() + bar.get_height()/2,
-                 f"{val:.2f}", va="center", fontsize=8)
+        ax.text(val + 0.02, bar.get_y() + bar.get_height() / 2,
+                f"{val:.2f}", va="center", fontsize=8)
 
-    # 2. Sharpe vs Number of Trades (scatter)
-    ax2 = axes[0, 1]
-    scatter = ax2.scatter(
-        valid["trades"],
-        valid["sharpe"],
-        c=valid["sharpe"],
-        cmap="RdYlGn",
-        alpha=0.7,
-        edgecolors="white",
-        linewidth=0.5
+
+def _plot_sharpe_vs_trades(ax, valid: pd.DataFrame) -> None:
+    """Plot scatter of Sharpe ratio vs trade count."""
+    colors = ["#2ecc71" if s > 0 else "#e74c3c" for s in valid["sharpe"]]
+    ax.scatter(
+        valid["trades"], valid["sharpe"],
+        c=colors, alpha=0.7, edgecolors="white", linewidth=0.5
     )
-    ax2.set_xlabel("Number of Trades")
-    ax2.set_ylabel("Sharpe Ratio")
-    ax2.set_title("Sharpe Ratio vs Trade Count")
-    ax2.axhline(y=0, color="black", linewidth=0.5, linestyle="--")
-    plt.colorbar(scatter, ax=ax2, label="Sharpe")
+    ax.set_xlabel("Number of Trades")
+    ax.set_ylabel("Sharpe Ratio")
+    ax.set_title("Sharpe Ratio vs Trade Count")
+    ax.axhline(y=0, color="black", linewidth=0.5, linestyle="--")
 
-    # 3. Distribution of Sharpe ratios (histogram)
-    ax3 = axes[1, 0]
+
+def _plot_sharpe_distribution(ax, valid: pd.DataFrame) -> None:
+    """Plot histogram of Sharpe ratio distribution."""
     n_bins = min(30, len(valid) // 2 + 1)
-    ax3.hist(valid["sharpe"], bins=n_bins, color="#3498db", edgecolor="white", alpha=0.8)
-    ax3.axvline(x=0, color="red", linewidth=1.5, linestyle="--", label="Zero")
-    ax3.axvline(x=valid["sharpe"].median(), color="orange", linewidth=1.5,
-                linestyle="-", label=f"Median: {valid['sharpe'].median():.2f}")
-    ax3.set_xlabel("Sharpe Ratio")
-    ax3.set_ylabel("Count")
-    ax3.set_title("Distribution of Sharpe Ratios")
-    ax3.legend()
+    ax.hist(valid["sharpe"], bins=n_bins, color="#3498db", edgecolor="white", alpha=0.8)
+    ax.axvline(x=0, color="red", linewidth=1.5, linestyle="--", label="Zero")
+    ax.axvline(x=valid["sharpe"].median(), color="orange", linewidth=1.5,
+               linestyle="-", label=f"Median: {valid['sharpe'].median():.2f}")
+    ax.set_xlabel("Sharpe Ratio")
+    ax.set_ylabel("Count")
+    ax.set_title("Distribution of Sharpe Ratios")
+    ax.legend()
 
-    # 4. Summary statistics text box
-    ax4 = axes[1, 1]
-    ax4.axis("off")
 
+def _plot_summary_stats(ax, table: pd.DataFrame, valid: pd.DataFrame) -> None:
+    """Plot summary statistics text box."""
+    ax.axis("off")
     stats_text = f"""
     PAIR SWEEP SUMMARY
     {"="*40}
@@ -265,18 +233,34 @@ def plot_summary(table: pd.DataFrame, output_dir: str, top_n: int = 15) -> None:
     Trades:                 {int(valid.iloc[0]['trades']):>10}
     Best Z-Score:           {valid.iloc[0]['best_entry_z']:>10.1f}
     """
+    ax.text(0.1, 0.95, stats_text, transform=ax.transAxes, fontsize=10,
+            verticalalignment="top", fontfamily="monospace",
+            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
 
-    ax4.text(0.1, 0.95, stats_text, transform=ax4.transAxes, fontsize=10,
-             verticalalignment="top", fontfamily="monospace",
-             bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
+
+def plot_summary(table: pd.DataFrame, output_dir: str, top_n: int = 15) -> None:
+    """Generate summary visualization plots for pair sweep results."""
+    os.makedirs(output_dir, exist_ok=True)
+
+    valid = table.dropna(subset=["sharpe"]).copy()
+    if valid.empty:
+        print("No valid results to plot.")
+        return
+
+    valid["pair"] = valid["symbol_y"] + "/" + valid["symbol_x"]
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle("Pair Sweep Summary", fontsize=14, fontweight="bold")
+
+    _plot_top_pairs_chart(axes[0, 0], valid, top_n)
+    _plot_sharpe_vs_trades(axes[0, 1], valid)
+    _plot_sharpe_distribution(axes[1, 0], valid)
+    _plot_summary_stats(axes[1, 1], table, valid)
 
     plt.tight_layout()
-
-    # Save figure
     plot_path = os.path.join(output_dir, "pair_sweep_summary.png")
     plt.savefig(plot_path, dpi=150, bbox_inches="tight")
     print(f"Summary plot saved to: {plot_path}")
-
     plt.close(fig)
 
 

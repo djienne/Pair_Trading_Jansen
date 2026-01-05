@@ -80,21 +80,45 @@ def load_price_series(symbol: str, config: dict, base_dir: str) -> pd.Series:
     return df["close"].rename(symbol)
 
 
-def kf_smoother(prices: pd.Series) -> pd.Series:
+# ---------------------------------------------------------------------------
+# Kalman Filter Defaults
+# ---------------------------------------------------------------------------
+DEFAULT_KALMAN = {
+    "smoother_obs_cov": 1.0,
+    "smoother_trans_cov": 0.05,
+    "hedge_delta": 0.001,
+    "hedge_obs_cov": 2.0,
+}
+
+
+def get_kalman_params(config: dict) -> dict:
+    """Get Kalman filter parameters from config with defaults."""
+    kalman_config = config.get("kalman", {})
+    return {
+        key: kalman_config.get(key, default)
+        for key, default in DEFAULT_KALMAN.items()
+    }
+
+
+def kf_smoother(prices: pd.Series, config: dict | None = None) -> pd.Series:
+    """Apply Kalman filter smoothing to price series."""
+    params = get_kalman_params(config or {})
     kf = KalmanFilter(
         transition_matrices=np.eye(1),
         observation_matrices=np.eye(1),
         initial_state_mean=0,
         initial_state_covariance=1,
-        observation_covariance=1,
-        transition_covariance=0.05,
+        observation_covariance=params["smoother_obs_cov"],
+        transition_covariance=params["smoother_trans_cov"],
     )
     state_means, _ = kf.filter(prices.values)
     return pd.Series(state_means.flatten(), index=prices.index)
 
 
-def kf_hedge_ratio(x: pd.Series, y: pd.Series) -> np.ndarray:
-    delta = 1e-3
+def kf_hedge_ratio(x: pd.Series, y: pd.Series, config: dict | None = None) -> np.ndarray:
+    """Estimate time-varying hedge ratio using Kalman filter."""
+    params = get_kalman_params(config or {})
+    delta = params["hedge_delta"]
     trans_cov = delta / (1 - delta) * np.eye(2)
     obs_mat = np.expand_dims(np.vstack([[x], [np.ones(len(x))]]).T, axis=1)
     kf = KalmanFilter(
@@ -104,7 +128,7 @@ def kf_hedge_ratio(x: pd.Series, y: pd.Series) -> np.ndarray:
         initial_state_covariance=np.ones((2, 2)),
         transition_matrices=np.eye(2),
         observation_matrices=obs_mat,
-        observation_covariance=2,
+        observation_covariance=params["hedge_obs_cov"],
         transition_covariance=trans_cov,
     )
     state_means, _ = kf.filter(y.values)
@@ -518,10 +542,10 @@ def backtest_pair(
         if period_prices.empty:
             continue
 
-        y_smooth = kf_smoother(period_prices[y_symbol])
-        x_smooth = kf_smoother(period_prices[x_symbol])
+        y_smooth = kf_smoother(period_prices[y_symbol], config)
+        x_smooth = kf_smoother(period_prices[x_symbol], config)
 
-        hedge_states = kf_hedge_ratio(x_smooth, y_smooth)
+        hedge_states = kf_hedge_ratio(x_smooth, y_smooth, config)
         hedge_ratio = pd.Series(hedge_states[:, 0], index=period_prices.index)
 
         spread = period_prices[y_symbol] + period_prices[x_symbol] * hedge_ratio
