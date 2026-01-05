@@ -1,6 +1,6 @@
 # Jansen Method Pair Trading
 
-This project implements a pairs trading strategy inspired by the "Pairs trading in practice" section of `pair_trading_in_practice.pdf` and the ML4Trading book (chapters 06-07). It utilizes Kalman filtering to smooth price series and estimate a time-varying hedge ratio. A z-score is built from the resulting spread, and trades are executed when the z-score crosses defined thresholds.
+This project implements a pairs trading strategy inspired by the book "Machine Learning for Algorithmic Trading" from Stefan Jansen. It utilizes Kalman filtering to smooth price series and estimate a time-varying hedge ratio. A z-score is built from the resulting spread, and trades are executed when the z-score crosses defined thresholds.
 
 ## Features
 
