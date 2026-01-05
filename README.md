@@ -16,6 +16,9 @@ This project implements a pairs trading strategy inspired by the book "Machine L
 ## Example Output
 
 <img src="output/pair_sweep_summary.png" width="700" alt="Pair sweep summary showing top pairs by Sharpe ratio" />
+
+<img src="output/equity_LTC_XRP_z1.5.png" width="700" alt="Equity curve for LTC/XRP pair at z-score threshold 1.5" />
+
 ## Scripts
 
 ### 1. `jansen_backtest.py`
