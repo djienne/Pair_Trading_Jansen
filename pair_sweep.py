@@ -362,10 +362,11 @@ def main() -> None:
         if idx % 5 == 0 or idx == len(pairs):
             current_best = global_tracker.best_sharpe or 0.0
             pair_sharpe = best_of_pair["sharpe"] if best_of_pair else 0.0
+            best_pair_str = f"{best_pair_info[0]}/{best_pair_info[1]}" if best_pair_info else "N/A"
             print(
                 f"Processed {idx}/{len(pairs)} pairs. "
                 f"Latest: {y_symbol}/{x_symbol} sharpe={pair_sharpe:.4f} "
-                f"| Global Best Sharpe: {current_best:.4f}"
+                f"| Global Best: {best_pair_str} sharpe={current_best:.4f}"
             )
 
     # Print final results
