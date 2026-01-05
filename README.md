@@ -41,7 +41,15 @@ python pair_sweep.py
 - It filters symbols based on `min_history_days`.
 - It tests each pair against the `threshold_grid` defined in `config.json`.
 - Results are cached in the `cache/` folder using a SHA-256 signature of the data and code.
-- It outputs a ranked table based on `sharpe` ratio (requiring at least `min_trades`) and generates an equity plot for the best-performing pair in `output/`.
+
+**Outputs:**
+- `output/pair_rankings.csv` - Ranked results table with Sharpe, trades, best z-score
+- `output/pair_sweep_summary.png` - Summary visualization with:
+  - Top pairs bar chart (by Sharpe ratio)
+  - Sharpe vs trade count scatter plot
+  - Sharpe ratio distribution histogram
+  - Summary statistics panel
+- `output/equity_{Y}_{X}_z{Z}.png` - Equity curve for the best-performing pair
 
 ## Configuration (`config.json`)
 
