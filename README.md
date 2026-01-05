@@ -1,6 +1,6 @@
 # Jansen Method Pair Trading
 
-This project implements a pairs trading strategy inspired by the "Pairs trading in practice" section of `pair_trading_in_practice.pdf`. It utilizes Kalman filtering to smooth price series and estimate a time-varying hedge ratio. A z-score is built from the resulting spread, and trades are executed when the z-score crosses defined thresholds.
+This project implements a pairs trading strategy inspired by the "Pairs trading in practice" section of `pair_trading_in_practice.pdf` and the ML4Trading book (chapters 06-07). It utilizes Kalman filtering to smooth price series and estimate a time-varying hedge ratio. A z-score is built from the resulting spread, and trades are executed when the z-score crosses defined thresholds.
 
 ## Features
 
@@ -8,8 +8,10 @@ This project implements a pairs trading strategy inspired by the "Pairs trading 
 - **Dynamic Hedge Ratio**: Uses a Kalman Filter to estimate the cointegration relationship between two assets in real-time.
 - **Mean Reversion Strategy**: Trades the z-score of the spread, entering at `entry_z` and exiting when the z-score changes sign (mean reversion).
 - **Rolling Windows**: Recomputes hedge ratio/half-life/z-score quarterly, trades a 6-month window, and only opens trades in the first 3 months.
+- **Risk Management**: Configurable stop-loss via `risk_limit` (default -20% spread return).
 - **Optimization Tools**: Scripts to sweep z-score thresholds and find the best-performing pairs.
 - **Caching**: `pair_sweep.py` uses a signature-based caching mechanism to speed up repeated runs.
+- **Unit Tests**: Test suite for backtest logic validation.
 
 ## Example Output
 
@@ -43,22 +45,25 @@ python pair_sweep.py
 
 ## Configuration (`config.json`)
 
-- `data_dir`: Path to the directory containing `.feather` price files.
-- `output_dir`: Path where backtest results and plots are saved.
-- `interval`: Candle interval (e.g., `1d`).
-- `quote`: Quote currency (e.g., `USDT`).
-- `symbol_y`: Primary symbol (Lead).
-- `symbol_x`: Secondary symbol (Lag/Hedge).
-- `start_equity`: Initial capital.
-- `entry_z`: Z-score threshold for entering a trade.
-- `threshold_grid`: List of z-score thresholds to test in sweep scripts.
-- `min_history_days`: Minimum data points required for a symbol to be included in `pair_sweep.py`.
-- `min_trades`: Minimum number of trades required for a backtest result to be considered valid in sweep scripts.
-- `fee_rate`: Transaction fee rate (e.g., `0.001` for 0.1%).
-- `lookback_days`: Rolling lookback (in days) used before each quarterly test window.
-- `trade_window_months`: Months traded after each quarterly test end (default 6).
-- `entry_window_months`: Months within the trading window where entries are allowed (default 3).
-- `show_plot`: Boolean to toggle the display of the equity curve window.
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `data_dir` | Path to directory containing `.feather` price files | `data/feather` |
+| `output_dir` | Path where backtest results and plots are saved | `output` |
+| `interval` | Candle interval (e.g., `1d`) | `1d` |
+| `quote` | Quote currency (e.g., `USDT`) | `USDT` |
+| `symbol_y` | Primary symbol (Lead) | - |
+| `symbol_x` | Secondary symbol (Lag/Hedge) | - |
+| `start_equity` | Initial capital | `1000.0` |
+| `entry_z` | Z-score threshold for entering a trade | `2.0` |
+| `risk_limit` | Stop-loss trigger as spread return (e.g., `-0.2` = -20%) | `-0.2` |
+| `threshold_grid` | List of z-score thresholds to test in sweep scripts | `[1.0, 1.5, 2.0, 2.5, 3.0]` |
+| `min_history_days` | Minimum data points required for a symbol in `pair_sweep.py` | `1000` |
+| `min_trades` | Minimum trades required for a valid backtest result | `20` |
+| `fee_rate` | Transaction fee rate (e.g., `0.001` for 0.1%) | `0.001` |
+| `lookback_days` | Rolling lookback (in days) before each quarterly test window | `730` |
+| `trade_window_months` | Months traded after each quarterly test end | `6` |
+| `entry_window_months` | Months within trading window where entries are allowed | `3` |
+| `show_plot` | Toggle display of equity curve window | `true` |
 
 ## Installation
 
@@ -70,3 +75,34 @@ pip install pandas numpy pykalman matplotlib pyarrow
 
 The data files should be in Feather format with a `close` price column and an `open_time_dt` datetime column.
 Files should be named following the pattern `{symbol}{quote}_{interval}.feather` (e.g., `BNBUSDT_1d.feather`).
+
+## Testing
+
+Run the unit tests with:
+
+```powershell
+python -m unittest tests.test_backtest_logic -v
+```
+
+## Project Structure
+
+```
+Jansen_method/
+├── jansen_backtest.py      # Core backtest engine
+├── utils.py                # Shared utilities and helpers
+├── pair_sweep.py           # Brute-force pair ranking
+├── zscore_sweep.py         # Z-score threshold optimization
+├── config.json             # Configuration file
+├── tests/
+│   └── test_backtest_logic.py
+├── data/feather/           # Price data (not tracked in git)
+├── cache/                  # Cached results (not tracked in git)
+├── output/                 # Backtest results and plots (not tracked in git)
+└── 06_*.ipynb, 07_*.ipynb  # Reference notebooks from ML4Trading
+```
+
+## References
+
+- `pair_trading_in_practice.pdf` - Original methodology paper
+- `06_statistical_arbitrage_with_cointegrated_pairs.ipynb` - Cointegration testing reference
+- `07_pairs_trading_backtest.ipynb` - Backtest implementation reference (uses Backtrader)
