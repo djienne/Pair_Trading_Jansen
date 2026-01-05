@@ -1,8 +1,10 @@
 {
   "data_dir": "data/feather",
+  "feather_dir": "data/feather",
   "output_dir": "output",
   "interval": "1d",
   "quote": "USDT",
+  "symbols": ["BTC", "ETH", "BNB", "SOL", "ADA", "AVAX", "DOGE", "ATOM"],
   "symbol_y": "BNB",
   "symbol_x": "SOL",
   "start_equity": 1000.0,
