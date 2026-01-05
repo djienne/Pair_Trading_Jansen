@@ -29,6 +29,10 @@ python jansen_backtest.py
 It reads `symbol_x` and `symbol_y` from `config.json`, runs the backtest, and saves the results/plots to the `output/` directory.
 The backtest recalibrates quarterly using a rolling lookback window.
 
+**Outputs:**
+- `output/equity_{Y}_{X}.png` - Equity curve plot
+- `output/jansen_backtest_{Y}_{X}.feather` - Daily backtest results
+
 ### 2. `zscore_sweep.py`
 Sweeps a grid of z-score thresholds for the pair defined in `config.json`.
 ```powershell
@@ -52,7 +56,7 @@ python pair_sweep.py
   - Sharpe vs trade count scatter plot
   - Sharpe ratio distribution histogram
   - Summary statistics panel
-- `output/equity_{Y}_{X}_z{Z}.png` - Equity curve for the best-performing pair
+- `output/equity_{Y}_{X}_z{Z}.png` - Equity curve for the top-ranked pair (includes z-score in filename)
 
 ### 4. `download_data.py`
 Downloads historical klines data from Binance Futures API.
@@ -134,9 +138,3 @@ Jansen_method/
 ├── output/                 # Backtest results and plots (not tracked in git)
 └── 06_*.ipynb, 07_*.ipynb  # Reference notebooks from ML4Trading
 ```
-
-## References
-
-- `pair_trading_in_practice.pdf` - Original methodology paper
-- `06_statistical_arbitrage_with_cointegrated_pairs.ipynb` - Cointegration testing reference
-- `07_pairs_trading_backtest.ipynb` - Backtest implementation reference (uses Backtrader)

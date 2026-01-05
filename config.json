@@ -9,6 +9,7 @@
   "symbol_x": "SOL",
   "start_equity": 1000.0,
   "entry_z": 2.0,
+  "risk_limit": -0.2,
   "threshold_grid": [1.0, 1.5, 2.0, 2.5, 3.0],
   "min_history_days": 1000,
   "min_trades": 20,
@@ -17,6 +18,8 @@
   "trade_window_months": 6,
   "entry_window_months": 3,
   "show_plot": true,
+  "binance_base_url": "https://fapi.binance.com",
+  "max_klines_per_request": 1500,
   "kalman": {
     "smoother_obs_cov": 1.0,
     "smoother_trans_cov": 0.05,
