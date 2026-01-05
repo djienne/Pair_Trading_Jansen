@@ -42,13 +42,12 @@ class Position:
         return self.size_y * price_y + self.size_x * price_x
 
     def compute_spread_return(self, price_y: float, price_x: float) -> float:
-        """Compute spread return relative to entry."""
+        """Compute spread return relative to entry (P&L percentage)."""
         if not np.isfinite(self.entry_spread) or self.entry_spread == 0:
             return 0.0
         current_spread = self.compute_value(price_y, price_x)
-        return (self.entry_spread - current_spread) / (
-            np.sign(self.entry_spread) * self.entry_spread
-        )
+        # Positive return = profit, negative return = loss
+        return (current_spread - self.entry_spread) / abs(self.entry_spread)
 
 
 @dataclass
@@ -342,6 +341,16 @@ def simulate_pair_trades(
         portfolio_value_pre = cash + compute_total_position_value(positions, price_y, price_x)
         day_turnover = 0.0
 
+        # Risk limit check - run every day, not just event days
+        if risk_limit is not None:
+            for period in list(positions.keys()):
+                pos = positions[period]
+                if pos.compute_spread_return(price_y, price_x) < risk_limit:
+                    cash_delta, turnover = close_position(pos, price_y, price_x, fee_rate)
+                    cash += cash_delta
+                    day_turnover += turnover
+                    positions.pop(period)
+
         events_today = events_by_date.get(ts)
         if events_today is not None and not events_today.empty:
             # Process closes
@@ -356,16 +365,6 @@ def simulate_pair_trades(
                 cash_delta, turnover = close_position(pos, price_y, price_x, fee_rate)
                 cash += cash_delta
                 day_turnover += turnover
-
-            # Risk limit check
-            if risk_limit is not None:
-                for period in list(positions.keys()):
-                    pos = positions[period]
-                    if pos.compute_spread_return(price_y, price_x) < risk_limit:
-                        cash_delta, turnover = close_position(pos, price_y, price_x, fee_rate)
-                        cash += cash_delta
-                        day_turnover += turnover
-                        positions.pop(period)
 
             # Collect new entries
             entry_events = events_today.loc[events_today["side"] != 0]
