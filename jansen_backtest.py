@@ -1,8 +1,7 @@
 import argparse
 import os
 import sys
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -35,19 +34,25 @@ class Position:
     hr: float  # hedge ratio
     size_y: float
     size_x: float
-    entry_spread: float
+    entry_value: float  # net position value at entry/rebalance (size_y*py + size_x*px)
+    entry_gross: float  # gross notional at entry/rebalance (|size_y|*py + |size_x|*px)
 
     def compute_value(self, price_y: float, price_x: float) -> float:
         """Compute current position value."""
         return self.size_y * price_y + self.size_x * price_x
 
     def compute_spread_return(self, price_y: float, price_x: float) -> float:
-        """Compute spread return relative to entry (P&L percentage)."""
-        if not np.isfinite(self.entry_spread) or self.entry_spread == 0:
+        """Compute P&L as a fraction of gross notional deployed.
+
+        Using gross notional (always > 0) as the denominator keeps the metric
+        stable for dollar-neutral hedged spreads, where the *net* entry value
+        can be ~0 and would otherwise make the ratio blow up or disable stops.
+        """
+        if not np.isfinite(self.entry_gross) or self.entry_gross <= 0:
             return 0.0
-        current_spread = self.compute_value(price_y, price_x)
+        current_value = self.compute_value(price_y, price_x)
         # Positive return = profit, negative return = loss
-        return (current_spread - self.entry_spread) / abs(self.entry_spread)
+        return (current_value - self.entry_value) / self.entry_gross
 
 
 @dataclass
@@ -135,16 +140,27 @@ def kf_hedge_ratio(x: pd.Series, y: pd.Series, config: dict | None = None) -> np
     return -state_means
 
 
-def estimate_half_life(spread: pd.Series) -> int:
+def estimate_half_life(spread: pd.Series) -> int | None:
+    """Estimate the mean-reversion half-life of a spread.
+
+    Regresses the spread change on the lagged spread (Ornstein-Uhlenbeck
+    discretisation). Returns ``None`` when the spread is not mean-reverting
+    (``beta >= 0``) or the regression is degenerate/singular, signalling the
+    caller to skip trading that period rather than trade on a garbage window.
+    """
     spread = spread.dropna()
     if len(spread) < 3:
-        return 1
+        return None
     X = spread.shift().iloc[1:].to_frame().assign(const=1)
     y = spread.diff().iloc[1:]
-    beta = (np.linalg.inv(X.T @ X) @ X.T @ y).iloc[0]
-    if beta == 0 or not np.isfinite(beta):
-        return 1
-    halflife = int(round(-np.log(2) / beta, 0))
+    try:
+        coeffs, *_ = np.linalg.lstsq(X.values, y.values, rcond=None)
+    except np.linalg.LinAlgError:
+        return None
+    beta = coeffs[0]
+    if not np.isfinite(beta) or beta >= 0:
+        return None
+    halflife = int(round(-np.log(2) / beta))
     return max(halflife, 1)
 
 
@@ -169,17 +185,20 @@ def build_period_events(
     is_above = z_score > entry_z
     is_below = z_score < -entry_z
 
-    # Identify Exit Signals (Crossing Zero)
-    cross_zero = np.sign(z_score) != np.sign(z_score.shift(1).bfill())
+    # Identify Exit Signals (Crossing Zero).
+    # Require both the current and previous sign to be valid so the first bar
+    # and any NaN warm-up bars are never flagged as a crossing.
+    sign = np.sign(z_score)
+    prev_sign = sign.shift(1)
+    cross_zero = (sign != prev_sign) & prev_sign.notna() & sign.notna()
 
     # Create event series
-    # We only care about the first instance of crossing the threshold
+    # We only care about the first instance of crossing the threshold.
+    # Use fill_value=False so the shifted boolean masks keep bool dtype; a
+    # plain .fillna(False) coerces to object and makes `~` a no-op.
     entry_signals = pd.Series(np.nan, index=z_score.index, dtype=float)
-
-    # We need to detect the crossing to avoid repetitive signals,
-    # though filtering adjacent duplicates handles that too.
-    entry_signals.loc[is_above & ~is_above.shift(1).fillna(False)] = -1.0
-    entry_signals.loc[is_below & ~is_below.shift(1).fillna(False)] = 1.0
+    entry_signals.loc[is_above & ~is_above.shift(1, fill_value=False)] = -1.0
+    entry_signals.loc[is_below & ~is_below.shift(1, fill_value=False)] = 1.0
 
     exit_signals = pd.Series(np.nan, index=z_score.index, dtype=float)
     exit_signals.loc[cross_zero] = 0.0
@@ -233,45 +252,40 @@ def build_period_events(
             # Ensure no duplicates at the boundary
             final_events = final_events.loc[final_events.shift() != final_events]
 
+    # Force-close at the trade-window boundary so a spread that never re-crosses
+    # zero cannot leak a position past its own trading window. This is a window
+    # boundary, not a signal, so it is intentionally NOT lagged.
+    #
+    # The simulator applies exits BEFORE entries on a given bar, so the period
+    # is "open at the end" iff the last bar carrying events has an entry on it
+    # (a same-bar exit only closes a *prior* sub-position). Detect that via the
+    # resolved end state rather than the literal last row.
+    last_bar = z_score.index.max()
+
+    def _open_at_end(events: pd.Series) -> bool:
+        if events.empty:
+            return False
+        last_ts = events.index.max()
+        return bool((events.loc[[last_ts]] != 0.0).any())
+
+    if _open_at_end(final_events) and final_events.index.max() == last_bar:
+        # An entry on the very last window bar cannot be held or closed
+        # in-window; drop last-bar entries (a same-bar exit is kept, as it may
+        # still close a prior sub-position).
+        keep = ~((final_events.index == last_bar) & (final_events != 0.0))
+        final_events = final_events[keep]
+
+    if _open_at_end(final_events):
+        # The forced exit lands on a fresh, strictly-later timestamp than every
+        # existing event, so no value-dedup is needed (and must be avoided: an
+        # adjacent same-bar exit would otherwise swallow it).
+        forced_exit = pd.Series([0.0], index=[last_bar])
+        final_events = pd.concat([final_events, forced_exit]).sort_index()
+
+    if final_events.empty:
+        return empty_events.copy()
+
     return final_events.to_frame("side")
-
-
-def build_period_positions(
-    z_score: pd.Series,
-    entry_z: float,
-    entry_window_months: int,
-) -> pd.Series:
-    """Replicate the notebook entry/exit rules within a trading window."""
-    if z_score.empty:
-        return pd.Series(dtype=float, index=z_score.index)
-
-    zeros = pd.Series(0.0, index=z_score.index)
-
-    events = build_period_events(z_score, entry_z, entry_window_months)
-    events = events.dropna(subset=["side"])
-    if events.empty:
-        return zeros
-
-    # Reconstruct positions series
-    positions = zeros.copy()
-    positions.loc[events.index] = events["side"].astype(float).values
-
-    # Forward fill positions
-    # We mask the area before the first event to 0 (already 0 initialized)
-    # Then ffill from there.
-    # However, since we initialized with zeros, simple ffill might overwrite 0s with 0s.
-    # We want to hold the state.
-    
-    # Create a sparse series with just the events
-    sparse_positions = pd.Series(np.nan, index=z_score.index, dtype=float)
-    sparse_positions.loc[events.index] = events["side"].astype(float).values
-    
-    # Forward fill. 
-    # Note: We need to ensure pre-first-event is 0. 
-    # If the first event is at index 5, index 0-4 should be 0.
-    filled_positions = sparse_positions.ffill().fillna(0.0)
-
-    return filled_positions
 
 
 # ---------------------------------------------------------------------------
@@ -280,15 +294,23 @@ def build_period_positions(
 def compute_position_sizes(
     side: float, hr: float, target_value: float, price_y: float, price_x: float
 ) -> tuple[float, float]:
-    """Compute position sizes based on side and hedge ratio."""
+    """Size both legs by the gross notional of one spread unit.
+
+    The spread unit is ``spread = price_y + hr * price_x`` (hr is typically
+    negative, so a long spread is long Y / short X). Sizing ``k`` spread units
+    so the gross notional ``|size_y|*price_y + |size_x|*price_x == target_value``
+    keeps the two legs symmetric between long and short and bounded as
+    ``hr -> 0`` or ``hr -> inf`` -- the old ``1/hr`` short-leg sizing exploded
+    into unbounded leverage when the hedge ratio was small.
+    """
     if not np.isfinite(hr) or abs(hr) <= 1e-12:
         return 0.0, 0.0
-    if side == 1.0:  # Long spread
-        size_y = target_value / price_y
-        size_x = hr * size_y
-    else:  # Short spread
-        size_x = target_value / price_x
-        size_y = (1.0 / hr) * size_x
+    gross_per_unit = price_y + abs(hr) * price_x
+    if not np.isfinite(gross_per_unit) or gross_per_unit <= 0:
+        return 0.0, 0.0
+    k = target_value / gross_per_unit  # spread units; gross notional == target_value
+    size_y = side * k
+    size_x = side * k * hr
     return size_y, size_x
 
 
@@ -323,7 +345,7 @@ def compute_aggregate_metrics(
     spread_returns = [
         pos.compute_spread_return(price_y, price_x)
         for pos in positions.values()
-        if np.isfinite(pos.entry_spread) and pos.entry_spread != 0
+        if np.isfinite(pos.entry_gross) and pos.entry_gross > 0
     ]
     avg_spread_return = float(np.mean(spread_returns)) if spread_returns else 0.0
 
@@ -418,6 +440,12 @@ def simulate_pair_trades(
                     day_turnover += trade_notional
                     pos.size_y = new_size_y
                     pos.size_x = new_size_x
+                    # Re-baseline risk tracking from the rebalanced book (the
+                    # resize cash flow above already realizes the change).
+                    pos.entry_value = new_size_y * price_y + new_size_x * price_x
+                    pos.entry_gross = (
+                        abs(new_size_y) * price_y + abs(new_size_x) * price_x
+                    )
 
                 # Open new positions
                 for period, side, hr in entries:
@@ -431,14 +459,18 @@ def simulate_pair_trades(
                     if fee_rate:
                         cash -= fee_rate * trade_notional
                     day_turnover += trade_notional
-                    entry_spread = price_y * new_size_y + price_x * new_size_x
+                    entry_value = price_y * new_size_y + price_x * new_size_x
+                    entry_gross = (
+                        abs(new_size_y) * price_y + abs(new_size_x) * price_x
+                    )
                     positions[period] = Position(
                         period=period,
                         side=side,
                         hr=hr,
                         size_y=new_size_y,
                         size_x=new_size_x,
-                        entry_spread=entry_spread,
+                        entry_value=entry_value,
+                        entry_gross=entry_gross,
                     )
                     trade_count += 1
 
@@ -521,6 +553,7 @@ def backtest_pair(
             "hedge_ratio": np.nan,
             "spread": np.nan,
             "z_score": np.nan,
+            "z_signal": np.nan,
             "position": 0.0,
         },
         index=df.index,
@@ -554,6 +587,9 @@ def backtest_pair(
             continue
 
         half_life = estimate_half_life(lookback_spread)
+        if half_life is None:
+            # Spread is not mean-reverting in the lookback; skip this period.
+            continue
         max_window = len(lookback_spread)
         if max_window < 1:
             continue
@@ -561,16 +597,19 @@ def backtest_pair(
 
         rolling = spread.rolling(window=window, min_periods=window)
         z_score = (spread - rolling.mean()) / rolling.std()
+        # Lag the signal by one bar to avoid same-bar lookahead: a crossing
+        # detected from close[t] is acted on at close[t+1]. Shift the full
+        # series BEFORE slicing so the first trade-window bar inherits a valid
+        # value from the last lookback bar instead of NaN.
+        z_signal = z_score.shift(1)
 
         trade_slice = slice(trading_start, trading_end)
         trade_index = spread.loc[trade_slice].index
         if trade_index.empty:
             continue
-        trade_z = z_score.loc[trade_slice]
-        position = build_period_positions(
-            trade_z, entry_z, entry_window_months
-        )
-        events = build_period_events(trade_z, entry_z, entry_window_months)
+        trade_z = z_score.loc[trade_slice]            # raw z, diagnostics only
+        trade_z_signal = z_signal.loc[trade_slice]    # lagged z, drives trades
+        events = build_period_events(trade_z_signal, entry_z, entry_window_months)
         if not events.empty:
             events = events.copy()
             events["period"] = period_id
@@ -585,7 +624,7 @@ def backtest_pair(
             "hedge_ratio": hedge_ratio.loc[trade_index],
             "spread": spread.loc[trade_index],
             "z_score": trade_z,
-            "position": position,
+            "z_signal": trade_z_signal,
         }
         for column, series in period_series.items():
             results.loc[trade_index, column] = series
@@ -595,7 +634,6 @@ def backtest_pair(
     else:
         trade_events = pd.DataFrame(columns=["period", "side", "hedge_ratio"])
     sim = simulate_pair_trades(results, trade_events, config)
-    results["signal_position"] = sim["position"]
     results["position"] = sim["position"]
     results["n_positions"] = sim["n_positions"]
     results["trade_count"] = sim["trade_count"]

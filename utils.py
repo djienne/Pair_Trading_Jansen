@@ -102,9 +102,30 @@ def list_symbols(
 
 def summarize_results(results: pd.DataFrame) -> dict:
     """Compute summary statistics from backtest results."""
+    equity = results["equity"]
+
+    if "trade_count" in results.columns:
+        trades = results["trade_count"].iloc[-1]
+        trades_out = int(trades)
+    else:
+        trades = results["position"].diff().abs().fillna(0.0).sum() / 2
+        trades_out = float(trades)
+
+    # A run whose equity ever hits <= 0 (or goes non-finite) is degenerate: once
+    # the portfolio is wiped out, the daily-return ratio is meaningless and
+    # produces a spurious Sharpe. Mark it invalid (sharpe=nan) so it cannot rank.
+    if not np.isfinite(equity.to_numpy()).all() or (equity <= 0).any():
+        return {
+            "final_equity": float(equity.iloc[-1]),
+            "total_return": np.nan,
+            "avg_log_return": np.nan,
+            "sharpe": np.nan,
+            "trades": trades_out,
+        }
+
     returns = results["strategy_return"].fillna(0.0)
     log_returns = np.log1p(np.clip(returns, MIN_RETURN_CLIP, None))
-    total_return = results["equity"].iloc[-1] / results["equity"].iloc[0] - 1
+    total_return = equity.iloc[-1] / equity.iloc[0] - 1
     avg_log_return = log_returns.mean()
     std = returns.std()
 
@@ -112,17 +133,12 @@ def summarize_results(results: pd.DataFrame) -> dict:
     if std and np.isfinite(std):
         sharpe = (returns.mean() / std) * np.sqrt(TRADING_DAYS_PER_YEAR)
 
-    if "trade_count" in results.columns:
-        trades = results["trade_count"].iloc[-1]
-    else:
-        trades = results["position"].diff().abs().fillna(0.0).sum() / 2
-
     return {
-        "final_equity": float(results["equity"].iloc[-1]),
+        "final_equity": float(equity.iloc[-1]),
         "total_return": float(total_return),
         "avg_log_return": float(avg_log_return),
         "sharpe": float(sharpe) if np.isfinite(sharpe) else np.nan,
-        "trades": int(trades) if "trade_count" in results.columns else float(trades),
+        "trades": trades_out,
     }
 
 
@@ -155,11 +171,21 @@ class ResultTracker:
 
     def update(self, summary: dict, z: float) -> bool:
         """Update with new result. Returns True if this is the new best."""
-        sharpe = summary.get("sharpe", np.nan)
-        trades = summary.get("trades", 0)
+        sharpe = summary.get("sharpe")
+        trades = summary.get("trades")
+
+        # Cache round-trips serialize NaN/Inf as JSON null -> None. Guard those
+        # (and any other non-numeric) before the numeric comparisons below.
+        if sharpe is None or trades is None:
+            return False
+        try:
+            sharpe = float(sharpe)
+            trades_num = float(trades)
+        except (TypeError, ValueError):
+            return False
 
         # Skip if insufficient trades or invalid sharpe
-        if trades < self.min_trades or not np.isfinite(sharpe):
+        if trades_num < self.min_trades or not np.isfinite(sharpe):
             return False
 
         if self.best_sharpe is None or sharpe > self.best_sharpe:

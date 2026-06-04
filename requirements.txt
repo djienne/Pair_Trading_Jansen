@@ -1,0 +1,9 @@
+# Runtime dependencies for the Jansen pair-trading backtest.
+# Lower bounds reflect versions known to work; pin exactly if you need
+# reproducible runs.
+pandas>=2.0
+numpy>=1.24
+pykalman>=0.9.5
+matplotlib>=3.7
+pyarrow>=12.0
+requests>=2.28

@@ -3,6 +3,7 @@ import json
 import os
 import random
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -265,6 +266,41 @@ def plot_summary(table: pd.DataFrame, output_dir: str, top_n: int = 15) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Parallel execution helpers
+# ---------------------------------------------------------------------------
+def _run_pair_worker(task: tuple):
+    """Module-level worker (picklable for the spawn start method on Windows).
+
+    One pathological pair must not abort the whole pool, so failures degrade to
+    a None result, which is reported as an empty row.
+    """
+    y_symbol, x_symbol, thresholds, config, cache_dir, code_paths, min_trades = task
+    try:
+        best = run_pair_backtest(
+            y_symbol, x_symbol, thresholds, config, cache_dir, code_paths, min_trades
+        )
+    except Exception as exc:  # noqa: BLE001 - keep the sweep going
+        print(f"  pair {y_symbol}/{x_symbol} failed: {exc}")
+        best = None
+    return y_symbol, x_symbol, best
+
+
+def _row_from_best(y_symbol: str, x_symbol: str, best: dict | None) -> dict:
+    """Build a results-table row from a pair's best result (or a blank row)."""
+    if best:
+        return {"symbol_y": y_symbol, "symbol_x": x_symbol, **best}
+    return {
+        "symbol_y": y_symbol,
+        "symbol_x": x_symbol,
+        "best_entry_z": None,
+        "sharpe": None,
+        "avg_log_return": None,
+        "final_equity": None,
+        "trades": None,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
@@ -281,6 +317,12 @@ def main() -> None:
         default=None,
         help="Comma-separated z-score thresholds to test per pair.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Parallel worker processes (default: config 'workers' or 1).",
+    )
     args = parser.parse_args()
 
     # Load configuration
@@ -290,17 +332,30 @@ def main() -> None:
     data_dir = resolve_path(BASE_DIR, config.get("data_dir", "../data/feather"))
     min_history_days = int(config.get("min_history_days", 1000))
     min_trades = int(config.get("min_trades", 20))
+    test_both_directions = bool(config.get("test_both_directions", True))
+    workers = args.workers if args.workers is not None else int(config.get("workers", 1))
+    workers = max(1, workers)
 
     # Find symbols and build pairs
     symbols = list_symbols(data_dir, interval, quote, min_history_days)
     if len(symbols) < 2:
         raise ValueError("Not enough symbols found to build pairs.")
 
-    pairs = [
-        (y_symbol, x_symbol)
-        for i, y_symbol in enumerate(symbols)
-        for x_symbol in symbols[i + 1:]
-    ]
+    # Pair order matters: symbol_y is the regression-dependent series in the
+    # hedge-ratio estimate, so (A, B) != (B, A). Test both directions by default.
+    if test_both_directions:
+        pairs = [
+            (y_symbol, x_symbol)
+            for y_symbol in symbols
+            for x_symbol in symbols
+            if y_symbol != x_symbol
+        ]
+    else:
+        pairs = [
+            (y_symbol, x_symbol)
+            for i, y_symbol in enumerate(symbols)
+            for x_symbol in symbols[i + 1:]
+        ]
     random.shuffle(pairs)
 
     # Setup
@@ -313,47 +368,34 @@ def main() -> None:
         os.path.join(BASE_DIR, "utils.py"),
     ]
 
-    print(f"Testing {len(pairs)} pair combinations (min_trades={min_trades})...")
+    print(
+        f"Testing {len(pairs)} pair combinations "
+        f"(min_trades={min_trades}, workers={workers})..."
+    )
 
-    # Process all pairs
+    # Process all pairs (serially, or fanned out across worker processes).
+    tasks = [
+        (y, x, thresholds, config, cache_dir, code_paths, min_trades)
+        for (y, x) in pairs
+    ]
     rows = []
-    global_tracker = ResultTracker(min_trades=min_trades)
-    best_pair_info = None
+    total = len(tasks)
+    if workers == 1:
+        for idx, task in enumerate(tasks, 1):
+            y_symbol, x_symbol, best = _run_pair_worker(task)
+            rows.append(_row_from_best(y_symbol, x_symbol, best))
+            if idx % 5 == 0 or idx == total:
+                print(f"Processed {idx}/{total} pairs. Latest: {y_symbol}/{x_symbol}")
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(_run_pair_worker, task) for task in tasks]
+            for idx, future in enumerate(as_completed(futures), 1):
+                y_symbol, x_symbol, best = future.result()
+                rows.append(_row_from_best(y_symbol, x_symbol, best))
+                if idx % 5 == 0 or idx == total:
+                    print(f"Processed {idx}/{total} pairs. Latest: {y_symbol}/{x_symbol}")
 
-    for idx, (y_symbol, x_symbol) in enumerate(pairs, 1):
-        print(f"Starting pair {y_symbol}/{x_symbol}...")
-
-        best_of_pair = run_pair_backtest(
-            y_symbol, x_symbol, thresholds, config, cache_dir, code_paths, min_trades
-        )
-
-        if best_of_pair:
-            if global_tracker.update(best_of_pair, best_of_pair["best_entry_z"]):
-                best_pair_info = (y_symbol, x_symbol, best_of_pair["best_entry_z"])
-            rows.append({"symbol_y": y_symbol, "symbol_x": x_symbol, **best_of_pair})
-        else:
-            rows.append({
-                "symbol_y": y_symbol,
-                "symbol_x": x_symbol,
-                "best_entry_z": None,
-                "sharpe": None,
-                "avg_log_return": None,
-                "final_equity": None,
-                "trades": None,
-            })
-
-        # Progress report
-        if idx % 5 == 0 or idx == len(pairs):
-            current_best = global_tracker.best_sharpe or 0.0
-            pair_sharpe = best_of_pair["sharpe"] if best_of_pair else 0.0
-            best_pair_str = f"{best_pair_info[0]}/{best_pair_info[1]}" if best_pair_info else "N/A"
-            print(
-                f"Processed {idx}/{len(pairs)} pairs. "
-                f"Latest: {y_symbol}/{x_symbol} sharpe={pair_sharpe:.4f} "
-                f"| Global Best: {best_pair_str} sharpe={current_best:.4f}"
-            )
-
-    # Print final results
+    # Print final results (sorted by Sharpe desc)
     table = build_results_table(rows)
     print_results_table(table)
 
@@ -362,11 +404,14 @@ def main() -> None:
     save_results_csv(table, output_dir)
     plot_summary(table, output_dir)
 
-    # Generate equity plot for best pair
-    if best_pair_info:
-        best_y, best_x, best_z = best_pair_info
+    # Best pair = top valid row of the Sharpe-sorted table.
+    valid = table.dropna(subset=["sharpe"])
+    if not valid.empty:
+        top = valid.iloc[0]
+        best_y, best_x, best_z = top["symbol_y"], top["symbol_x"], top["best_entry_z"]
         name = f"{best_y}_{best_x}_z{best_z}"
         show_plot = bool(config.get("show_plot", True))
+        print(f"Best pair: {best_y}/{best_x} z={best_z} sharpe={top['sharpe']:.4f}")
 
         best_results = load_best_results(best_y, best_x, best_z, config, cache_dir)
         plot_equity(best_results, output_dir, name, show_plot)

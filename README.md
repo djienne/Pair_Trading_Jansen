@@ -6,18 +6,23 @@ This project implements a pairs trading strategy inspired by the book "Machine L
 
 - **Kalman Filter Smoothing**: Reduces noise in individual price series.
 - **Dynamic Hedge Ratio**: Uses a Kalman Filter to estimate the cointegration relationship between two assets in real-time.
-- **Mean Reversion Strategy**: Trades the z-score of the spread, entering at `entry_z` and exiting when the z-score changes sign (mean reversion).
-- **Rolling Windows**: Recomputes hedge ratio/half-life/z-score quarterly, trades a 6-month window, and only opens trades in the first 3 months.
-- **Risk Management**: Configurable stop-loss via `risk_limit` (default -20% spread return).
-- **Optimization Tools**: Scripts to sweep z-score thresholds and find the best-performing pairs.
+- **Mean Reversion Strategy**: Trades the z-score of the spread, entering at `entry_z` and exiting when the z-score changes sign (mean reversion). Signals are executed on the **next bar** to avoid look-ahead bias.
+- **Rolling Windows**: Recomputes hedge ratio/half-life/z-score quarterly, trades a 6-month window, only opens trades in the first 3 months, and force-closes any position still open at the window end. Periods whose spread is not mean-reverting (non-negative half-life regression) are skipped.
+- **Bounded Position Sizing**: Both legs are sized by the gross notional of one spread unit, so long/short are symmetric and leverage stays bounded for any hedge ratio.
+- **Risk Management**: Configurable stop-loss via `risk_limit` — measured as P&L relative to the position's gross notional (default -20%).
+- **Optimization Tools**: Scripts to sweep z-score thresholds and rank the best-performing pairs; `pair_sweep.py` runs in parallel via `--workers`.
 - **Caching**: `pair_sweep.py` uses a signature-based caching mechanism to speed up repeated runs.
 - **Unit Tests**: Test suite for backtest logic validation.
 
 ## Example Output
 
-<img src="output/pair_sweep_summary.png" width="700" alt="Pair sweep summary showing top pairs by Sharpe ratio" />
+Best pair from the sweep — **LTC/XRP** (`entry_z = 2.0`): **+186%** over 2020–2026, **Sharpe 0.69**, **max drawdown −27%** (net of 0.1% fees).
 
-<img src="output/equity_LTC_XRP_z1.5.png" width="700" alt="Equity curve for LTC/XRP pair at z-score threshold 1.5" />
+<img src="output/equity_LTC_XRP_z2.0.png" width="760" alt="LTC/XRP pairs-trade equity curve and drawdown (entry_z=2.0): +186%, Sharpe 0.69, max drawdown -27%" />
+
+Pair-ranking summary across all tested pairs:
+
+<img src="output/pair_sweep_summary.png" width="640" alt="Pair sweep summary showing top pairs by Sharpe ratio" />
 
 ## Scripts
 
@@ -43,11 +48,12 @@ Useful for finding the optimal entry threshold for a specific pair. It filters r
 ### 3. `pair_sweep.py`
 Ranks all possible pairs from the available data based on their performance.
 ```powershell
-python pair_sweep.py
+python pair_sweep.py --workers 8
 ```
 - It filters symbols based on `min_history_days`.
-- It tests each pair against the `threshold_grid` defined in `config.json`.
-- Results are cached in the `cache/` folder using a SHA-256 signature of the data and code.
+- It tests each pair against the `threshold_grid` defined in `config.json` (both directions `(A,B)` and `(B,A)` when `test_both_directions` is true).
+- `--workers N` fans the sweep out across N worker processes (default `1` = serial); `--thresholds "1.0,1.5,2.0"` overrides the grid.
+- Results are cached in the `cache/` folder using a SHA-256 signature of the data and code (editing any source file invalidates the cache, forcing a clean recompute).
 
 **Outputs:**
 - `output/pair_rankings.csv` - Ranked results table with Sharpe, trades, best z-score
@@ -86,10 +92,12 @@ python download_data.py --symbols BTCUSDT ETHUSDT BNBUSDT
 | `symbol_x` | Secondary symbol (Lag/Hedge) for single-pair backtest | - |
 | `start_equity` | Initial capital | `1000.0` |
 | `entry_z` | Z-score threshold for entering a trade | `2.0` |
-| `risk_limit` | Stop-loss trigger as spread return (e.g., `-0.2` = -20%) | `-0.2` |
+| `risk_limit` | Stop-loss trigger as P&L fraction of the position's gross notional (e.g., `-0.2` = -20%) | `-0.2` |
 | `threshold_grid` | List of z-score thresholds to test in sweep scripts | `[1.0, 1.5, 2.0, 2.5, 3.0]` |
 | `min_history_days` | Minimum data points required for a symbol in `pair_sweep.py` | `1000` |
 | `min_trades` | Minimum trades required for a valid backtest result | `20` |
+| `test_both_directions` | In `pair_sweep.py`, test both `(A,B)` and `(B,A)` (order matters: `symbol_y` is the regression-dependent series). Roughly doubles runtime. | `true` |
+| `workers` | Parallel worker processes for `pair_sweep.py` (CLI `--workers` overrides this) | `1` |
 | `fee_rate` | Transaction fee rate (e.g., `0.001` for 0.1%) | `0.001` |
 | `lookback_days` | Rolling lookback (in days) before each quarterly test window | `730` |
 | `trade_window_months` | Months traded after each quarterly test end | `6` |
@@ -104,11 +112,15 @@ python download_data.py --symbols BTCUSDT ETHUSDT BNBUSDT
 
 ## Installation
 
-Ensure you have the following dependencies installed:
+Requires **Python 3.10+** (the code uses `X | None` type-hint syntax).
+
+Install the dependencies:
 
 ```powershell
-pip install pandas numpy pykalman matplotlib pyarrow requests
+pip install -r requirements.txt
 ```
+
+(equivalently: `pip install pandas numpy pykalman matplotlib pyarrow requests`)
 
 The data files should be in Feather format with a `close` price column and an `open_time_dt` datetime column.
 Files should be named following the pattern `{symbol}{quote}_{interval}.feather` (e.g., `BNBUSDT_1d.feather`).
@@ -121,17 +133,25 @@ Run the unit tests with:
 python -m unittest tests.test_backtest_logic -v
 ```
 
+Or discover all tests:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
 ## Project Structure
 
 ```
-Jansen_method/
+Pair_Trading_Jansen/
 ├── jansen_backtest.py      # Core backtest engine
 ├── utils.py                # Shared utilities and helpers
 ├── pair_sweep.py           # Brute-force pair ranking
 ├── zscore_sweep.py         # Z-score threshold optimization
 ├── download_data.py        # Binance data downloader
 ├── config.json             # Configuration file
+├── requirements.txt        # Python dependencies
 ├── tests/
+│   ├── __init__.py
 │   └── test_backtest_logic.py
 ├── data/feather/           # Price data (not tracked in git)
 ├── cache/                  # Cached results (not tracked in git)

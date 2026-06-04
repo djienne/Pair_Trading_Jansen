@@ -1,13 +1,17 @@
 import argparse
-import json
 import os
+import sys
 import time
-from typing import Dict, Optional
+from typing import Optional
 
 import pandas as pd
 import requests
 
-from utils import load_config
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+from utils import load_config, resolve_path
 
 COLUMNS = [
     "open_time",
@@ -104,12 +108,10 @@ def update_symbol_data(
     if existing is None or existing.empty:
         start_time = 0
     else:
-        last_open = int(existing["open_time"].max())
-        start_time = last_open + interval_ms
-
-    if start_time >= end_time:
-        print(f"{symbol} {interval}: already up to date.")
-        return existing
+        # Resume FROM (not after) the last stored candle so the most recent
+        # candle - which may have been still forming when last fetched - gets
+        # refreshed rather than frozen forever.
+        start_time = int(existing["open_time"].max())
 
     all_rows = []
     current_start = start_time
@@ -141,11 +143,15 @@ def update_symbol_data(
     new_df = klines_to_frame(all_rows)
     if existing is not None and not existing.empty:
         combined = pd.concat([existing, new_df], ignore_index=True)
-        combined = combined.drop_duplicates(subset=["open_time"]).sort_values(
-            "open_time"
-        )
     else:
-        combined = new_df.sort_values("open_time")
+        combined = new_df
+    # Refetched candles overwrite stale copies (keep="last"), then drop the
+    # current still-forming candle so only completed candles are persisted.
+    combined = (
+        combined.drop_duplicates(subset=["open_time"], keep="last")
+        .sort_values("open_time")
+    )
+    combined = combined[combined["close_time"] <= end_time]
 
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     combined.to_feather(out_path)
@@ -154,13 +160,17 @@ def update_symbol_data(
 
 
 def main(config_path: str = "config.json", symbols_override: Optional[list] = None) -> None:
-    config = load_config(config_path)
+    config = load_config(resolve_path(BASE_DIR, config_path))
     interval = config.get("interval", "1d")
     quote = config.get("quote", "USDT")
     base_url = config.get("binance_base_url", "https://fapi.binance.com")
     limit = int(config.get("max_klines_per_request", 1500))
 
-    feather_dir = config.get("feather_dir") or config.get("data_dir", "data/feather")
+    # Resolve relative to the repo (like the backtest) so downloads land where
+    # the backtest reads, regardless of the current working directory.
+    feather_dir = resolve_path(
+        BASE_DIR, config.get("feather_dir") or config.get("data_dir", "data/feather")
+    )
     os.makedirs(feather_dir, exist_ok=True)
 
     if symbols_override:
