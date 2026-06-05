@@ -1,0 +1,32 @@
+# Explicit project name so this never collides with other folders that happen
+# to be named "freqtrade_live" (compose's default project name is the folder
+# name). Keep this unique.
+name: pair_ltc_xrp_jansen
+services:
+  freqtrade:
+    image: freqtradeorg/freqtrade:2025.9
+    # Build step adds pykalman (see Dockerfile.technical)
+    build:
+      context: .
+      dockerfile: "./Dockerfile.technical"
+    restart: unless-stopped
+    container_name: PAIR_LTC_XRP
+    volumes:
+      - "./user_data:/freqtrade/user_data"
+    # API on localhost only. http://127.0.0.1:3012  (user: david)
+    ports:
+      - "127.0.0.1:3012:8080"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: '1024M'
+    # Default command used when running `docker compose up`.
+    # Dry-run on Binance futures. To run the Hyperliquid variant instead, point
+    # --config at config_hyperliquid.json (after filling in wallet credentials).
+    command: >
+      trade
+      --logfile /freqtrade/user_data/logs/freqtrade.log
+      --db-url sqlite:////freqtrade/user_data/tradesv3.sqlite
+      --config /freqtrade/user_data/config.json
+      --strategy PairTradingJansen

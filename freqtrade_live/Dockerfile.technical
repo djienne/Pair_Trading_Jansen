@@ -1,0 +1,5 @@
+FROM freqtradeorg/freqtrade:2025.9
+
+# pykalman: time-varying hedge ratio + price smoothing (jansen_signals.py)
+# scipy/pyarrow: pykalman dep + feather data IO
+RUN pip3 install --no-cache-dir pykalman scipy pyarrow

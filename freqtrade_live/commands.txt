@@ -1,0 +1,35 @@
+# ---------------------------------------------------------------------------
+# Jansen LTC/XRP pair trade -- freqtrade dry-run cheatsheet
+# Run all commands from this folder (freqtrade_live/).
+# ---------------------------------------------------------------------------
+
+# 0) Build the image (installs pykalman). Only needed once / after dep changes.
+docker compose build
+
+# 1) Download daily Binance USDT-M futures data for both legs (warm-up history).
+docker compose run --rm freqtrade download-data \
+  --exchange binance --trading-mode futures \
+  --pairs LTC/USDT:USDT XRP/USDT:USDT \
+  --timeframe 1d --timerange 20200101-
+
+# 2) Backtest sanity check (proves the two-leg signal wiring end-to-end).
+docker compose run --rm freqtrade backtesting \
+  --strategy PairTradingJansen \
+  --config /freqtrade/user_data/config.json \
+  --timeframe 1d --timerange 20220101-
+
+# 3) Start the dry-run bot (detached) and follow logs.
+docker compose up -d
+docker compose logs -f
+
+# 4) Inspect / stop.
+docker compose ps
+docker compose down
+
+# ---------------------------------------------------------------------------
+# Hyperliquid variant (after filling wallet creds in config_hyperliquid.json):
+#   download-data: --exchange hyperliquid, pairs LTC/USDC:USDC XRP/USDC:USDC
+#   trade: edit docker-compose.yml command --config -> config_hyperliquid.json
+# Going LIVE (real money): set "dry_run": false in the chosen config. Nothing in
+# the strategy file changes.
+# ---------------------------------------------------------------------------
