@@ -1,17 +1,23 @@
 # pragma pylint: disable=missing-docstring, invalid-name, pointless-string-statement
 """Live (dry-run) Jansen pair-trading strategy for LTC/XRP.
 
-A faithful freqtrade port of ``Pair_Trading_Jansen/jansen_backtest.py`` (which
-ranked LTC/XRP the #1 pair, Sharpe 0.69, entry_z=2.0). The signal math lives in
-``jansen_signals.py``; this class wires it into freqtrade as a *two-leg,
-dollar-neutral* spread trade:
+A *single-cohort* live adaptation of ``Pair_Trading_Jansen/jansen_backtest.py``
+(which ranked LTC/XRP the #1 pair, Sharpe 0.69, entry_z=2.0). The signal math
+lives in ``jansen_signals.py``; this class wires it into freqtrade as a
+*two-leg, dollar-neutral* spread trade:
 
   * Whitelist both legs (LTC and XRP perps). ``max_open_trades = 2``.
   * The shared spread state (+1 long-spread / -1 short-spread / 0 flat) is
     computed once per candle from both legs' closes (sibling fetched via the
-    DataProvider, the INTERMARKET informative pattern).
+    DataProvider, the INTERMARKET informative pattern). The Kalman filters,
+    half-life and z-window are recalibrated per calendar quarter over the
+    trailing 730d (the backtest's per-period cadence).
+  * Entries fire only on the candle where the state *crosses* into +-1 (the
+    backtest's first-crossing events); exits fire on z crossing zero, plus the
+    spread stop.
   * Each leg trades the opposite direction, sized so the two legs are
-    gross-notional dollar-neutral via the time-varying hedge ratio.
+    gross-notional dollar-neutral via the time-varying hedge ratio, off the
+    *current* wallet equity (compounding).
 
            spread state |   LTC leg    |   XRP leg
            -------------+--------------+--------------
@@ -21,6 +27,17 @@ dollar-neutral* spread trade:
 
 Exit is z crossing zero (the exit signal) plus a spread stop in ``custom_exit``
 (combined P&L of both legs < -20% of gross notional, the backtest's risk_limit).
+
+Known divergences from ``jansen_backtest.py`` (the backtest is inherently
+RETROSPECTIVE -- it only activates a quarterly cohort once that cohort's whole
+6-month window is historical, jansen_backtest.py L571 -- so a bit-for-bit live
+reproduction is impossible). This live strategy is faithful in *methodology*
+but, by design:
+  * holds ONE spread position; it cannot represent the backtest's overlapping
+    cohorts (two simultaneous positions on ~121 of 732 backtest days);
+  * has no 3-month entry-window gate and no 6-month forced window close;
+  * is anchored to "now", not retrospective.
+Use ``jansen_backtest.py`` for performance numbers; this bot is the live trader.
 
 Switching dry-run -> real money, or Binance -> Hyperliquid, is purely a config
 change; this strategy file is unchanged.
@@ -158,12 +175,21 @@ class PairTradingJansen(IStrategy):
     # ----------------------------------------------------------------------- #
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         state = dataframe["pair_state"]
+        prev = state.shift(1)
+        # Threshold-CROSSING entries: fire only on the candle where the spread
+        # state transitions INTO +-1 (matching the backtest's first-crossing
+        # entry events, jansen_backtest.py L199-201). The held `state` still
+        # drives exits, but after a spread stop the state stays +-1 with no fresh
+        # transition, so the bot does NOT re-enter without a new zero-cross +
+        # threshold crossing.
+        entered_long_spread = (state == 1) & (prev != 1)
+        entered_short_spread = (state == -1) & (prev != -1)
         if metadata["pair"] == self.lead_pair:           # LTC
-            dataframe.loc[state == 1, "enter_long"] = 1
-            dataframe.loc[state == -1, "enter_short"] = 1
+            dataframe.loc[entered_long_spread, "enter_long"] = 1
+            dataframe.loc[entered_short_spread, "enter_short"] = 1
         else:                                            # XRP (opposite)
-            dataframe.loc[state == -1, "enter_long"] = 1
-            dataframe.loc[state == 1, "enter_short"] = 1
+            dataframe.loc[entered_short_spread, "enter_long"] = 1
+            dataframe.loc[entered_long_spread, "enter_short"] = 1
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -183,12 +209,10 @@ class PairTradingJansen(IStrategy):
         self, pair, current_time, current_rate, proposed_stake, min_stake,
         max_stake, leverage, entry_tag, side, **kwargs,
     ) -> float:
-        capital = float(
-            self.config.get("available_capital")
-            or self.config.get("dry_run_wallet")
-            or 1000.0
-        )
-        target = capital * self.target_capital_ratio
+        # Size from CURRENT equity (compounding), matching the backtest's
+        # portfolio_value-based sizing (jansen_backtest.py L425) rather than a
+        # static capital number.
+        target = self._current_equity() * self.target_capital_ratio
 
         py = self._last_close(self.lead_pair)   # LTC price
         px = self._last_close(self.lag_pair)    # XRP price
@@ -249,6 +273,26 @@ class PairTradingJansen(IStrategy):
     # ----------------------------------------------------------------------- #
     # Small DataProvider helpers
     # ----------------------------------------------------------------------- #
+    def _current_equity(self) -> float:
+        """Current total stake (wallet) value for compounding sizing.
+
+        Uses live wallet equity when available (the COPY_HL / DELTA_NEUTRAL
+        pattern); falls back to the static config capital during backtest init
+        or if the wallet is not yet populated.
+        """
+        try:
+            if getattr(self, "wallets", None) is not None:
+                total = float(self.wallets.get_total_stake_amount())
+                if total and total > 0:
+                    return total
+        except Exception:  # pragma: no cover - defensive: wallet not ready
+            pass
+        return float(
+            self.config.get("available_capital")
+            or self.config.get("dry_run_wallet")
+            or 1000.0
+        )
+
     def _last_close(self, pair: str):
         return self._last_value(pair, "close")
 

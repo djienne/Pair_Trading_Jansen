@@ -13,6 +13,13 @@ The signal is expressed as a *position state* (+1 long-spread, -1 short-spread,
 ``|z| > entry_z`` and hold until z crosses zero. This maps cleanly onto
 freqtrade's enter/exit columns for each leg.
 
+The Kalman filters, half-life and z-window are recalibrated per calendar quarter
+over the trailing ``lookback_days`` (the backtest's per-period cadence), and a
+quarter only becomes tradable once a full lookback sits behind it. This is a
+*single-cohort* projection of the backtest: one continuous position, NOT the
+backtest's overlapping period positions. See ``compute_state_signal`` and the
+strategy's "Known divergences" note.
+
 Sign conventions (must match the backtest):
     spread = price_y + hr * price_x          # y = lead (LTC), x = lag (XRP)
     hr is the Kalman slope, typically < 0.
@@ -133,42 +140,19 @@ def _state_from_z(z: np.ndarray, entry_z: float) -> np.ndarray:
     return state
 
 
-def _causal_zscore(
-    spread: pd.Series, lookback_days: int, min_lookback: int = 90
-) -> pd.Series:
-    """Rolling z-score with a half-life window recalibrated *causally*.
+def _quarter_ends(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """Calendar-quarter boundary dates present in ``index``.
 
-    The z-score window is re-estimated at each **calendar-quarter boundary**
-    from the trailing ``lookback_days`` of spread only (never future data), then
-    held constant through the quarter -- exactly the research backtest's
-    quarterly recalibration (``get_quarter_ends`` + per-period half-life,
-    backtest L563-599). Because every value depends only on past data and the
-    recalibration is anchored to the calendar (not to the dataframe's first row),
-    z[t] is identical whether computed live (short df) or in backtest (long df),
-    so the two stay in lockstep and no lookahead is introduced.
+    Matches the research backtest's ``get_quarter_ends`` (backtest L167-170):
+    the last available bar in each calendar quarter. These anchor the per-cohort
+    recalibration so the live signal recalibrates on exactly the same cadence as
+    the backtest, and -- being calendar-anchored, not anchored to the dataframe's
+    first row -- they are stable whether computed on a short (live) or long
+    (backtest) window.
     """
-    sp = spread.values
-    n = len(sp)
-    z = np.full(n, np.nan)
-    quarters = spread.index.to_period("Q")
-
-    cur_window: int | None = None
-    last_q = None
-    for t in range(n):
-        q = quarters[t]
-        if q != last_q:
-            last_q = q
-            lb_start = max(0, t - lookback_days + 1)
-            if t - lb_start + 1 >= min_lookback:
-                hl = estimate_half_life(pd.Series(sp[lb_start : t + 1]))
-                if hl is not None:
-                    cur_window = max(2, int(min(2 * hl, lookback_days)))
-        if cur_window is not None and t + 1 >= cur_window:
-            seg = sp[t + 1 - cur_window : t + 1]
-            sd = seg.std(ddof=1)
-            if sd > 0:
-                z[t] = (sp[t] - seg.mean()) / sd
-    return pd.Series(z, index=spread.index)
+    if not isinstance(index, pd.DatetimeIndex):
+        index = pd.to_datetime(index)
+    return index.to_series().resample("QE").last().dropna().index
 
 
 def compute_state_signal(
@@ -200,30 +184,92 @@ def compute_state_signal(
         ``z``      -- causal rolling z-score of the spread
         ``state``  -- +1 long-spread / -1 short-spread / 0 flat
 
+    **Single-cohort, per-quarter recalibration.** The Kalman filters, half-life
+    and z-window are recalibrated at each calendar-quarter boundary over the
+    trailing ``lookback_days`` of data -- the same cadence and windowing as the
+    research backtest's per-period loop (backtest L563-599) -- rather than a
+    single global pass. Each date is governed by exactly one cohort (the most
+    recent quarter boundary before it), so unlike the backtest there are NO
+    overlapping cohorts: this is one continuous held position, not a sum of
+    independent period positions. A quarter only becomes active once a full
+    ``lookback_days`` of history sits behind it (the backtest's skip guard,
+    L571), so no signal is produced for roughly the first two years of data.
+
     All columns are strictly causal (value at t uses only data <= t): the Kalman
-    ``filter`` is a forward pass and the z-window recalibrates only on trailing
-    data. This keeps live and freqtrade-backtest results identical per date.
+    ``filter`` is a forward pass, the half-life uses only the lookback portion
+    (strictly before every governed bar), and the z-window is trailing. No
+    explicit ``shift(1)`` is applied -- freqtrade executes a signal on the next
+    candle, which already reproduces the backtest's one-bar ``z_signal`` lag
+    (backtest L604); shifting here as well would double-lag.
     """
     idx = lead_close.index
     out = pd.DataFrame(
         {"hr": np.nan, "spread": np.nan, "z": np.nan, "state": 0.0}, index=idx
     )
-    n = len(lead_close)
-    if n < min_history:
+    if len(lead_close) < min_history:
         return out
 
-    y_smooth = kf_smoother(lead_close, kalman)
-    x_smooth = kf_smoother(lag_close, kalman)
+    data_start = idx.min()
+    data_end = idx.max()
+    q_ends = _quarter_ends(idx)
+    day = pd.DateOffset(days=1)
+    lookback = pd.DateOffset(days=lookback_days)
 
-    hedge_states = kf_hedge_ratio(x_smooth, y_smooth, kalman)
-    hr = pd.Series(hedge_states[:, 0], index=idx)
+    hr_full = pd.Series(np.nan, index=idx)
+    spread_full = pd.Series(np.nan, index=idx)
+    z_full = pd.Series(np.nan, index=idx)
 
-    spread = lead_close + lag_close * hr
-    z = _causal_zscore(spread, lookback_days)
-    state = _state_from_z(z.values, entry_z)
+    for i, q_end in enumerate(q_ends):
+        trading_start = q_end + day
+        lookback_start = trading_start - lookback
+        # Warm-up gate: the cohort needs a full lookback_days behind it, exactly
+        # like the backtest skip guard (backtest L571).
+        if lookback_start < data_start:
+            continue
 
-    out["hr"] = hr
-    out["spread"] = spread
-    out["z"] = z
-    out["state"] = state
+        # Each date belongs to exactly one cohort: cohort i governs
+        # (q_end, next_q_end]; the final cohort runs to the end of the data
+        # ("now"). No overlap, no gap -> a single continuous position.
+        slice_end = q_ends[i + 1] if i + 1 < len(q_ends) else data_end
+
+        win_idx = idx[(idx >= lookback_start) & (idx <= slice_end)]
+        if len(win_idx) < min_history:
+            continue
+
+        y_win = lead_close.loc[win_idx]
+        x_win = lag_close.loc[win_idx]
+
+        # Recalibrate the Kalman filters on THIS cohort's window only (the
+        # backtest re-initialises them per period, backtest L578-584).
+        y_smooth = kf_smoother(y_win, kalman)
+        x_smooth = kf_smoother(x_win, kalman)
+        hedge_states = kf_hedge_ratio(x_smooth, y_smooth, kalman)
+        hr_win = pd.Series(hedge_states[:, 0], index=win_idx)
+        spread_win = y_win + x_win * hr_win
+
+        # Half-life from the lookback portion only [lookback_start : q_end]
+        # (backtest L585-589) -- strictly past data relative to every governed bar.
+        lb_spread = spread_win.loc[spread_win.index <= q_end]
+        half_life = estimate_half_life(lb_spread)
+        if half_life is None:
+            # Not mean-reverting this cohort -> emit no z; any held position
+            # carries through untouched, still protected by the spread stop.
+            continue
+        window = max(2, int(min(2 * half_life, len(lb_spread))))
+
+        roll = spread_win.rolling(window=window, min_periods=window)
+        z_win = (spread_win - roll.mean()) / roll.std()
+
+        # Publish only this cohort's governed dates (trading_start .. slice_end).
+        gov_idx = win_idx[(win_idx >= trading_start) & (win_idx <= slice_end)]
+        hr_full.loc[gov_idx] = hr_win.loc[gov_idx]
+        spread_full.loc[gov_idx] = spread_win.loc[gov_idx]
+        z_full.loc[gov_idx] = z_win.loc[gov_idx]
+
+    # One continuous held position over the concatenated, per-quarter z. NaN
+    # warm-up / skipped-cohort bars carry the previous position forward.
+    out["hr"] = hr_full
+    out["spread"] = spread_full
+    out["z"] = z_full
+    out["state"] = _state_from_z(z_full.values, entry_z)
     return out

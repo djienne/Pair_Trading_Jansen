@@ -17,17 +17,45 @@ legs** that are gross-notional dollar-neutral:
 | `0`  (z crosses 0)      | exit         | exit         |
 
 - **Hedge ratio** `hr` and **price smoothing**: 2-state / 1-state Kalman filters
-  (`pykalman`), parameters from the research `config.json`.
+  (`pykalman`), parameters from the research `config.json`. **Recalibrated per
+  calendar quarter** over the trailing `lookback_days = 730` — the backtest's
+  per-period cadence — not one global pass.
 - **Z-score window**: `min(2·half_life, lookback)` where the half-life is an
-  Ornstein–Uhlenbeck estimate over the trailing `lookback_days = 730`.
-- **Entry**: `|z| > 2.0`. **Exit**: z crosses zero, or the **spread stop** —
-  combined unrealized PnL of both legs `< −20%` of gross notional
+  Ornstein–Uhlenbeck estimate over the trailing 730d, re-estimated each quarter.
+  A quarter only becomes tradable once a full 730d sits behind it, so **the bot
+  emits no signal for roughly the first two years of data** (≈ mid-2022 for this
+  dataset), matching the reference.
+- **Entry**: `|z| > 2.0`, fired only on the candle where the state **crosses**
+  into ±1 (the backtest's first-crossing events — it will not re-enter after a
+  stop without a fresh crossing). **Exit**: z crosses zero, or the **spread
+  stop** — combined unrealized PnL of both legs `< −20%` of gross notional
   (`custom_exit`, the backtest's `risk_limit`).
 - **Sizing**: `custom_stake_amount` splits the deployed capital between the legs
-  by the hedge ratio so `|notional_LTC| + |notional_XRP|` ≈ deployed capital.
+  by the hedge ratio so `|notional_LTC| + |notional_XRP|` ≈ deployed capital,
+  sized off the **current wallet equity (compounding)**, like the backtest.
 
 The strategy evaluates once per **daily** candle, so trades are infrequent
 (~tens of trades over years) but high-quality — this is expected, not a bug.
+
+## Known divergences from `jansen_backtest.py`
+
+The research backtest is **inherently retrospective**: it only activates a
+quarterly cohort once that cohort's *entire* 6-month trading window is historical
+(`jansen_backtest.py:571`). At "now" the current cohort is always skipped, so a
+bit-for-bit live reproduction is impossible. This bot is faithful in
+*methodology* (per-quarter Kalman/half-life/z recalibration, 730d warm-up,
+crossing entries, compounding sizing) but **by design**:
+
+- holds **one** spread position — it cannot represent the backtest's
+  **overlapping cohorts** (two simultaneous positions on ~121 of 732 backtest
+  days);
+- has **no 3-month entry-window gate** and **no 6-month forced window close**;
+- is anchored to "now", not retrospective.
+
+So the live equity path will not match the backtest one-for-one (most of the
+difference concentrates on the overlap days). **Use `jansen_backtest.py` for
+performance numbers** — this folder is the live trader. `verify_fidelity.py`
+quantifies the remaining signal-level divergence on the local data.
 
 ## Layout
 
