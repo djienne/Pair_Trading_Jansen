@@ -10,9 +10,11 @@ This project implements a pairs trading strategy inspired by the book "Machine L
 - **Rolling Windows**: Recomputes hedge ratio/half-life/z-score quarterly, trades a 6-month window, only opens trades in the first 3 months, and force-closes any position still open at the window end. Periods whose spread is not mean-reverting (non-negative half-life regression) are skipped.
 - **Bounded Position Sizing**: Both legs are sized by the gross notional of one spread unit, so long/short are symmetric and leverage stays bounded for any hedge ratio.
 - **Risk Management**: Configurable stop-loss via `risk_limit` — measured as P&L relative to the position's gross notional (default -20%).
-- **Optimization Tools**: Scripts to sweep z-score thresholds and rank the best-performing pairs; `pair_sweep.py` runs in parallel via `--workers`.
+- **Optimization Tools**: Scripts to sweep z-score thresholds and rank the best-performing pairs by active-day Sharpe; `pair_sweep.py` runs in parallel via `--workers`.
 - **Caching**: `pair_sweep.py` uses a signature-based caching mechanism to speed up repeated runs.
 - **Unit Tests**: Test suite for backtest logic validation.
+
+Sharpe ratios in the sweep outputs are computed from active return days only (days where a position is open at the start or end of the return interval) and annualized with 365 days for daily crypto data.
 
 ## Example Output
 
@@ -39,7 +41,7 @@ It reads `symbol_x` and `symbol_y` from `config.json`, runs the backtest, and sa
 The backtest recalibrates quarterly using a rolling lookback window.
 
 **Outputs:**
-- `output/equity_{Y}_{X}.png` - Equity curve plot
+- `output/equity_{Y}_{X}.png` - Equity and drawdown plot
 - `output/jansen_backtest_{Y}_{X}.feather` - Daily backtest results
 
 ### 2. `zscore_sweep.py`
@@ -66,7 +68,7 @@ python pair_sweep.py --workers 8
   - Active-day Sharpe vs trade count scatter plot
   - Active-day Sharpe ratio distribution histogram
   - Summary statistics panel
-- `output/equity_{Y}_{X}_z{Z}.png` - Equity curve for the top-ranked pair (includes z-score in filename)
+- `output/equity_{Y}_{X}_z{Z}.png` - Equity and drawdown plot for a ranked pair (includes z-score in filename)
 
 ### 4. `download_data.py`
 Downloads historical klines data from Binance Futures API.
@@ -159,6 +161,6 @@ Pair_Trading_Jansen/
 │   └── test_backtest_logic.py
 ├── data/feather/           # Price data (not tracked in git)
 ├── cache/                  # Cached results (not tracked in git)
-├── output/                 # Backtest results and plots (not tracked in git)
+├── output/                 # Backtest results and plots (selected artifacts are tracked)
 └── 06_*.ipynb, 07_*.ipynb  # Reference notebooks from ML4Trading
 ```
