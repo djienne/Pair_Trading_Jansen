@@ -25,8 +25,15 @@ lives in ``jansen_signals.py``; this class wires it into freqtrade as a
             -1 (z>+2)   |  enter_short |  enter_long
              0 (z->0)   |    exit      |    exit
 
-Exit is z crossing zero (the exit signal) plus a spread stop in ``custom_exit``
-(combined P&L of both legs < -20% of gross notional, the backtest's risk_limit).
+Exits are LEG-COUPLED and centralized in ``custom_exit`` (``populate_exit_trend`` is
+a no-op). Both legs decide from ONE shared spread state -- the lead pair's
+``pair_state`` -- so they exit on the same iteration and cannot desync into a naked
+single leg. ``custom_exit`` applies, in order: (1) an orphan safety-net that
+force-closes a surviving leg whose sibling is gone (past a short entry-grace window),
+(2) a coupled exit when the shared state reverts to 0 or flips against the entered
+direction, and (3) the spread stop (combined P&L of both legs < -20% of gross
+notional, the backtest's risk_limit). This replaces the earlier per-leg exit signals,
+which could disagree on the boundary candle and orphan a leg.
 
 Known divergences from ``jansen_backtest.py`` (the backtest is inherently
 RETROSPECTIVE -- it only activates a quarterly cohort once that cohort's whole
@@ -48,6 +55,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from datetime import timedelta
 
 import numpy as np
 from pandas import DataFrame
@@ -81,6 +89,7 @@ class PairTradingJansen(IStrategy):
         "hedge_obs_cov": 2.0,
     }
     target_capital_ratio = 0.95  # fraction of available capital deployed gross
+    orphan_grace_seconds = 180   # don't force-close a lone leg during the entry handshake
 
     # --- freqtrade mechanics ------------------------------------------------
     timeframe = "1d"
@@ -193,13 +202,16 @@ class PairTradingJansen(IStrategy):
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        state = dataframe["pair_state"]
-        if metadata["pair"] == self.lead_pair:           # LTC
-            dataframe.loc[state <= 0, "exit_long"] = 1   # flat or flipped -> close long
-            dataframe.loc[state >= 0, "exit_short"] = 1
-        else:                                            # XRP (opposite)
-            dataframe.loc[state >= 0, "exit_long"] = 1
-            dataframe.loc[state <= 0, "exit_short"] = 1
+        # Exits are CENTRALIZED in custom_exit() so both legs decide from one shared
+        # spread state and can never desync into a naked single leg. We deliberately
+        # set NO dataframe exit signals here.
+        #
+        # Why a no-op (not just tidier): freqtrade skips custom_exit() on any candle
+        # where an exit signal is already set. The previous per-leg exit_long/exit_short
+        # were computed from each leg's *independently recomputed* pair_state, which can
+        # disagree on the boundary candle -- that asymmetry (a) orphaned a leg when only
+        # one side's signal fired and (b) would suppress the coupled custom_exit. Driving
+        # all exits through custom_exit() removes both failure modes.
         return dataframe
 
     # ----------------------------------------------------------------------- #
@@ -246,16 +258,48 @@ class PairTradingJansen(IStrategy):
     def custom_exit(
         self, pair, trade: Trade, current_time, current_rate, current_profit, **kwargs,
     ):
+        # All exits are decided HERE (populate_exit_trend is a no-op) so the two legs
+        # always act on ONE shared spread state and can never orphan.
+
+        # --- 1) Shared-state coupled exit (the primary exit) ---------------------
+        # Both legs read the SAME source of truth -- the lead pair's pair_state -- so
+        # they exit on the same candle (no per-leg recompute divergence). Exit when the
+        # spread has reverted to flat (0) or flipped against the entered direction. This
+        # is checked FIRST so that, when the signal reverts, BOTH legs are tagged
+        # "spread_revert" (rather than the second-processed leg being mislabelled an
+        # orphan just because its sibling's exit was committed a step earlier).
+        shared_state = self._last_value(self.lead_pair, "pair_state")
+        entered_dir = self._entered_spread_dir(trade)
+        if (
+            shared_state is not None
+            and np.isfinite(shared_state)
+            and entered_dir != 0
+            and int(round(shared_state)) != entered_dir
+        ):
+            return "spread_revert"
+
+        # --- 2) Orphan safety-net (genuine anomaly only) -------------------------
+        # We get here only when the shared signal still says HOLD. If this trade's
+        # sibling is nonetheless gone (e.g. it was closed by the spread stop, or any
+        # desync), a lone leg is a naked directional bet -- force-close it. Guarded so
+        # we do NOT fire during the brief two-leg entry handshake: skip while this trade
+        # still has a pending order, and require a short grace window since it opened
+        # (entries fill within seconds; a real orphan at a candle boundary is hours old).
         legs = [
             t for t in Trade.get_open_trades()
             if t.pair in (self.lead_pair, self.lag_pair)
         ]
         if len(legs) < 2:
-            # Hedge incomplete -> fall back to a per-leg stop at the same limit.
-            if current_profit < self.risk_limit:
-                return "spread_stop_single"
+            grace = timedelta(seconds=self.orphan_grace_seconds)
+            if not trade.has_open_orders and (current_time - trade.open_date_utc) > grace:
+                logger.warning(
+                    "Orphan leg detected for %s (sibling gone while signal still holds); "
+                    "force-closing this leg to restore a flat/neutral book.", pair,
+                )
+                return "orphan_close"
             return None
 
+        # --- 3) Combined spread stop (both legs present) -------------------------
         total_pnl = 0.0
         total_gross = 0.0
         for t in legs:
@@ -269,6 +313,19 @@ class PairTradingJansen(IStrategy):
         if total_gross > 0 and (total_pnl / total_gross) < self.risk_limit:
             return "spread_stop"
         return None
+
+    def _entered_spread_dir(self, trade: Trade) -> int:
+        """Spread direction (+1 long-spread / -1 short-spread) this leg was entered for.
+
+        lead (LTC):  long  -> +1, short -> -1
+        lag  (XRP):  short -> +1, long  -> -1   (the opposite leg)
+        Returns 0 for an unrecognised pair (defensive; never exits on it).
+        """
+        if trade.pair == self.lead_pair:
+            return -1 if trade.is_short else 1
+        if trade.pair == self.lag_pair:
+            return 1 if trade.is_short else -1
+        return 0
 
     # ----------------------------------------------------------------------- #
     # Small DataProvider helpers
