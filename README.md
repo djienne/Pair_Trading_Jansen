@@ -16,13 +16,17 @@ This project implements a pairs trading strategy inspired by the book "Machine L
 
 ## Example Output
 
-Best pair from the sweep — **LTC/XRP** (`entry_z = 2.0`): **+186%** over 2020–2026, **Sharpe 0.69**, **max drawdown −27%** (net of 0.1% fees).
+Kept/default pair from the refreshed sweep -- **LTC/XRP** (`entry_z = 2.0`): **+186%** over 2020-2026, **active-day Sharpe 1.46** (365-day annualized), **max drawdown -27%** (net of 0.1% fees). It ranks #2 under the new active-day Sharpe metric.
 
-<img src="output/equity_LTC_XRP_z2.0.png" width="760" alt="LTC/XRP pairs-trade equity curve and drawdown (entry_z=2.0): +186%, Sharpe 0.69, max drawdown -27%" />
+<img src="output/equity_LTC_XRP_z2.0.png" width="760" alt="LTC/XRP pairs-trade equity curve (entry_z=2.0): +186%, active-day Sharpe 1.46, max drawdown -27%" />
+
+Top-ranked pair under the refreshed metric -- **ADA/SOL** (`entry_z = 2.0`): **+119%** over 2020-2026, **active-day Sharpe 1.56** (365-day annualized), **max drawdown -18%** (net of 0.1% fees).
+
+<img src="output/equity_ADA_SOL_z2.0.png" width="760" alt="ADA/SOL pairs-trade equity curve (entry_z=2.0): +119%, active-day Sharpe 1.56, max drawdown -18%" />
 
 Pair-ranking summary across all tested pairs:
 
-<img src="output/pair_sweep_summary.png" width="640" alt="Pair sweep summary showing top pairs by Sharpe ratio" />
+<img src="output/pair_sweep_summary.png" width="640" alt="Pair sweep summary showing top pairs by active-day Sharpe ratio" />
 
 ## Scripts
 
@@ -43,7 +47,7 @@ Sweeps a grid of z-score thresholds for the pair defined in `config.json`.
 ```powershell
 python zscore_sweep.py --thresholds "1.0,1.5,2.0,2.5,3.0"
 ```
-Useful for finding the optimal entry threshold for a specific pair. It filters results based on `min_trades` and ranks them by `sharpe` ratio.
+Useful for finding the optimal entry threshold for a specific pair. It filters results based on `min_trades` and ranks them by active-day `sharpe` ratio.
 
 ### 3. `pair_sweep.py`
 Ranks all possible pairs from the available data based on their performance.
@@ -56,11 +60,11 @@ python pair_sweep.py --workers 8
 - Results are cached in the `cache/` folder using a SHA-256 signature of the data and code (editing any source file invalidates the cache, forcing a clean recompute).
 
 **Outputs:**
-- `output/pair_rankings.csv` - Ranked results table with Sharpe, trades, best z-score
+- `output/pair_rankings.csv` - Ranked results table with active-day Sharpe, trades, best z-score
 - `output/pair_sweep_summary.png` - Summary visualization with:
-  - Top pairs bar chart (by Sharpe ratio)
-  - Sharpe vs trade count scatter plot
-  - Sharpe ratio distribution histogram
+  - Top pairs bar chart (by active-day Sharpe ratio)
+  - Active-day Sharpe vs trade count scatter plot
+  - Active-day Sharpe ratio distribution histogram
   - Summary statistics panel
 - `output/equity_{Y}_{X}_z{Z}.png` - Equity curve for the top-ranked pair (includes z-score in filename)
 

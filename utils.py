@@ -10,7 +10,7 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-TRADING_DAYS_PER_YEAR = 252
+TRADING_DAYS_PER_YEAR = 365
 MIN_RETURN_CLIP = -0.999  # Clip returns to avoid log(0) issues
 
 
@@ -101,7 +101,10 @@ def list_symbols(
 
 
 def summarize_results(results: pd.DataFrame) -> dict:
-    """Compute summary statistics from backtest results."""
+    """Compute summary statistics from backtest results.
+
+    Sharpe is computed on active return days only and annualized to 365 days.
+    """
     equity = results["equity"]
 
     if "trade_count" in results.columns:
@@ -127,11 +130,20 @@ def summarize_results(results: pd.DataFrame) -> dict:
     log_returns = np.log1p(np.clip(returns, MIN_RETURN_CLIP, None))
     total_return = equity.iloc[-1] / equity.iloc[0] - 1
     avg_log_return = log_returns.mean()
-    std = returns.std()
+
+    if "n_positions" in results.columns:
+        has_position = results["n_positions"].fillna(0).astype(float) > 0
+    elif "position" in results.columns:
+        has_position = results["position"].fillna(0).astype(float) != 0
+    else:
+        has_position = returns != 0
+
+    active_returns = returns[has_position | has_position.shift(1, fill_value=False)]
+    std = active_returns.std()
 
     sharpe = np.nan
     if std and np.isfinite(std):
-        sharpe = (returns.mean() / std) * np.sqrt(TRADING_DAYS_PER_YEAR)
+        sharpe = (active_returns.mean() / std) * np.sqrt(TRADING_DAYS_PER_YEAR)
 
     return {
         "final_equity": float(equity.iloc[-1]),
@@ -162,7 +174,7 @@ class BestResult:
 
 
 class ResultTracker:
-    """Tracks the best backtest result based on Sharpe ratio."""
+    """Tracks the best backtest result based on active-day Sharpe ratio."""
 
     def __init__(self, min_trades: int = 20):
         self.min_trades = min_trades
@@ -209,7 +221,7 @@ class ResultTracker:
 # Results Reporting
 # ---------------------------------------------------------------------------
 def build_results_table(rows: list[dict]) -> pd.DataFrame:
-    """Build and sort results table by Sharpe ratio."""
+    """Build and sort results table by active-day Sharpe ratio."""
     return pd.DataFrame(rows).sort_values("sharpe", ascending=False)
 
 

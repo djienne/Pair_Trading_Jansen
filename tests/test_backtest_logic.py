@@ -1,3 +1,4 @@
+import math
 import os
 import sys
 import unittest
@@ -13,6 +14,7 @@ from jansen_backtest import (
     compute_position_sizes,
     simulate_pair_trades,
 )
+from utils import summarize_results
 
 
 class BacktestLogicTests(unittest.TestCase):
@@ -293,6 +295,26 @@ class BacktestLogicTests(unittest.TestCase):
         sim = simulate_pair_trades(results, trade_events, config)
         self.assertEqual(sim.loc[dates[20], "n_positions"], 1)
         self.assertEqual(sim.iloc[-1]["n_positions"], 0)
+
+    def test_summary_sharpe_uses_active_days_and_365(self):
+        dates = pd.date_range("2020-01-01", periods=5, freq="D")
+        returns = pd.Series([0.0, 0.10, -0.02, 0.03, 0.0], index=dates)
+        results = pd.DataFrame(
+            {
+                "equity": (1.0 + returns).cumprod() * 1000.0,
+                "strategy_return": returns,
+                "n_positions": [0, 1, 1, 0, 0],
+                "trade_count": [0, 1, 1, 1, 1],
+            },
+            index=dates,
+        )
+
+        active_returns = returns.iloc[[1, 2, 3]]
+        expected = active_returns.mean() / active_returns.std() * math.sqrt(365)
+
+        summary = summarize_results(results)
+
+        self.assertAlmostEqual(summary["sharpe"], expected)
 
 
 if __name__ == "__main__":

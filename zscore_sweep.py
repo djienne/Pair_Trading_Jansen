@@ -52,7 +52,7 @@ def find_best_threshold(
     rows: list[dict],
     min_trades: int,
 ) -> dict | None:
-    """Find the best threshold based on Sharpe ratio with minimum trade requirement."""
+    """Find the best threshold based on active-day Sharpe ratio."""
     tracker = ResultTracker(min_trades=min_trades)
     for row in rows:
         # Create a summary-like dict for the tracker
@@ -104,8 +104,8 @@ def main() -> None:
 
     best_z = best["best_entry_z"]
     print(
-        f"\nBest entry_z by Sharpe ratio (min {min_trades} trades): {best_z} "
-        f"(sharpe={best['sharpe']:.4f}, trades={best['trades']})"
+        f"\nBest entry_z by active-day Sharpe (min {min_trades} trades): {best_z} "
+        f"(active_day_sharpe={best['sharpe']:.4f}, trades={best['trades']})"
     )
 
     # Re-run best case to generate plot and save output

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.ticker import PercentFormatter
 
 pd.set_option('future.no_silent_downcasting', True)
 
@@ -656,18 +657,33 @@ def backtest_pair(
 
 
 def plot_equity(results: pd.DataFrame, output_dir: str, name: str, show_plot: bool) -> None:
-    plt.figure(figsize=(12, 6))
-    plt.plot(results.index, results["equity"], label="Equity", linewidth=1.5)
-    plt.title(f"Jansen Method Equity ({name})")
-    plt.xlabel("Date")
-    plt.ylabel("Equity (USD)")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
+    equity = results["equity"]
+    drawdown = equity / equity.cummax() - 1.0
+
+    fig, axes = plt.subplots(
+        2, 1, figsize=(12, 8), sharex=True,
+        gridspec_kw={"height_ratios": [3, 1]}
+    )
+
+    axes[0].plot(results.index, equity, label="Equity", linewidth=1.5)
+    axes[0].set_title(f"Jansen Method Equity ({name})")
+    axes[0].set_ylabel("Equity (USD)")
+    axes[0].grid(True, alpha=0.3)
+
+    axes[1].fill_between(results.index, drawdown, 0.0, color="#e74c3c", alpha=0.35)
+    axes[1].plot(results.index, drawdown, color="#c0392b", linewidth=1.0)
+    axes[1].set_title("Drawdown")
+    axes[1].set_xlabel("Date")
+    axes[1].set_ylabel("Drawdown")
+    axes[1].yaxis.set_major_formatter(PercentFormatter(1.0))
+    axes[1].grid(True, alpha=0.3)
+
+    fig.tight_layout()
     path = os.path.join(output_dir, f"equity_{name}.png")
-    plt.savefig(path, dpi=150)
+    fig.savefig(path, dpi=150)
     if show_plot:
         plt.show()
-    plt.close()
+    plt.close(fig)
 
 
 def main() -> None:

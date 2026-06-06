@@ -2,8 +2,8 @@
 """Live (dry-run) Jansen pair-trading strategy for LTC/XRP.
 
 A *single-cohort* live adaptation of ``Pair_Trading_Jansen/jansen_backtest.py``
-(which ranked LTC/XRP the #1 pair, Sharpe 0.69, entry_z=2.0). The signal math
-lives in ``jansen_signals.py``; this class wires it into freqtrade as a
+(where LTC/XRP now ranks #2 by active-day Sharpe, 1.46, entry_z=2.0). The signal
+math lives in ``jansen_signals.py``; this class wires it into freqtrade as a
 *two-leg, dollar-neutral* spread trade:
 
   * Whitelist both legs (LTC and XRP perps). ``max_open_trades = 2``.

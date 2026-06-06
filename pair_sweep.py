@@ -167,59 +167,130 @@ def save_results_csv(table: pd.DataFrame, output_dir: str) -> str:
 # ---------------------------------------------------------------------------
 # Summary Visualizations
 # ---------------------------------------------------------------------------
-def _plot_top_pairs_chart(ax, valid: pd.DataFrame, top_n: int) -> None:
-    """Plot horizontal bar chart of top pairs by Sharpe ratio."""
+def _pair_label(pair: tuple[str, str] | None) -> str | None:
+    """Return the display label for a selected pair."""
+    return f"{pair[0]}/{pair[1]}" if pair else None
+
+
+def _plot_top_pairs_chart(
+    ax,
+    valid: pd.DataFrame,
+    top_n: int,
+    selected_pair: tuple[str, str] | None = None,
+) -> None:
+    """Plot horizontal bar chart of top pairs by active-day Sharpe ratio."""
+    selected_label = _pair_label(selected_pair)
     top_pairs = valid.nlargest(top_n, "sharpe")
-    colors = ["#2ecc71" if s > 0 else "#e74c3c" for s in top_pairs["sharpe"]]
+    if selected_label and selected_label not in set(top_pairs["pair"]):
+        selected = valid.loc[valid["pair"] == selected_label]
+        if not selected.empty:
+            top_pairs = pd.concat([top_pairs, selected.iloc[:1]], ignore_index=True)
+
+    colors = [
+        "#f1c40f" if pair == selected_label else "#2ecc71" if sharpe > 0 else "#e74c3c"
+        for pair, sharpe in zip(top_pairs["pair"], top_pairs["sharpe"])
+    ]
     bars = ax.barh(top_pairs["pair"], top_pairs["sharpe"], color=colors)
-    ax.set_xlabel("Sharpe Ratio")
-    ax.set_title(f"Top {len(top_pairs)} Pairs by Sharpe Ratio")
+    ax.set_xlabel("Active-Day Sharpe Ratio (365d)")
+    ax.set_title(f"Top {len(top_pairs)} Pairs by Active-Day Sharpe")
     ax.axvline(x=0, color="black", linewidth=0.5)
     ax.invert_yaxis()
-    for bar, val in zip(bars, top_pairs["sharpe"]):
+    for bar, pair, val in zip(bars, top_pairs["pair"], top_pairs["sharpe"]):
+        if pair == selected_label:
+            bar.set_edgecolor("black")
+            bar.set_linewidth(2.0)
+            bar.set_hatch("//")
+        label = f"{val:.2f}" + ("  selected" if pair == selected_label else "")
         ax.text(val + 0.02, bar.get_y() + bar.get_height() / 2,
-                f"{val:.2f}", va="center", fontsize=8)
+                label, va="center", fontsize=8, fontweight="bold" if pair == selected_label else "normal")
 
 
-def _plot_sharpe_vs_trades(ax, valid: pd.DataFrame) -> None:
-    """Plot scatter of Sharpe ratio vs trade count."""
+def _plot_sharpe_vs_trades(
+    ax,
+    valid: pd.DataFrame,
+    selected_pair: tuple[str, str] | None = None,
+) -> None:
+    """Plot scatter of active-day Sharpe ratio vs trade count."""
+    selected_label = _pair_label(selected_pair)
     colors = ["#2ecc71" if s > 0 else "#e74c3c" for s in valid["sharpe"]]
     ax.scatter(
         valid["trades"], valid["sharpe"],
         c=colors, alpha=0.7, edgecolors="white", linewidth=0.5
     )
+    if selected_label:
+        selected = valid.loc[valid["pair"] == selected_label]
+        if not selected.empty:
+            row = selected.iloc[0]
+            ax.scatter(
+                row["trades"], row["sharpe"],
+                marker="*", s=260, c="#f1c40f", edgecolors="black",
+                linewidth=1.2, zorder=5, label=f"{selected_label} selected"
+            )
+            ax.legend(loc="best")
     ax.set_xlabel("Number of Trades")
-    ax.set_ylabel("Sharpe Ratio")
-    ax.set_title("Sharpe Ratio vs Trade Count")
+    ax.set_ylabel("Active-Day Sharpe Ratio (365d)")
+    ax.set_title("Active-Day Sharpe vs Trade Count")
     ax.axhline(y=0, color="black", linewidth=0.5, linestyle="--")
 
 
-def _plot_sharpe_distribution(ax, valid: pd.DataFrame) -> None:
-    """Plot histogram of Sharpe ratio distribution."""
+def _plot_sharpe_distribution(
+    ax,
+    valid: pd.DataFrame,
+    selected_pair: tuple[str, str] | None = None,
+) -> None:
+    """Plot histogram of active-day Sharpe ratio distribution."""
+    selected_label = _pair_label(selected_pair)
     n_bins = min(30, len(valid) // 2 + 1)
     ax.hist(valid["sharpe"], bins=n_bins, color="#3498db", edgecolor="white", alpha=0.8)
     ax.axvline(x=0, color="red", linewidth=1.5, linestyle="--", label="Zero")
     ax.axvline(x=valid["sharpe"].median(), color="orange", linewidth=1.5,
                linestyle="-", label=f"Median: {valid['sharpe'].median():.2f}")
-    ax.set_xlabel("Sharpe Ratio")
+    if selected_label:
+        selected = valid.loc[valid["pair"] == selected_label]
+        if not selected.empty:
+            ax.axvline(
+                x=selected.iloc[0]["sharpe"], color="#f1c40f", linewidth=2.5,
+                linestyle="-", label=f"{selected_label}: {selected.iloc[0]['sharpe']:.2f}"
+            )
+    ax.set_xlabel("Active-Day Sharpe Ratio (365d)")
     ax.set_ylabel("Count")
-    ax.set_title("Distribution of Sharpe Ratios")
+    ax.set_title("Distribution of Active-Day Sharpe Ratios")
     ax.legend()
 
 
-def _plot_summary_stats(ax, table: pd.DataFrame, valid: pd.DataFrame) -> None:
+def _plot_summary_stats(
+    ax,
+    table: pd.DataFrame,
+    valid: pd.DataFrame,
+    selected_pair: tuple[str, str] | None = None,
+) -> None:
     """Plot summary statistics text box."""
     ax.axis("off")
+    selected_label = _pair_label(selected_pair)
+    selected = valid.loc[valid["pair"] == selected_label] if selected_label else pd.DataFrame()
+    selected_text = ""
+    if not selected.empty:
+        selected_row = selected.iloc[0]
+        rank = int(valid["sharpe"].rank(method="min", ascending=False).loc[selected.index[0]])
+        selected_text = f"""
+    SELECTED PAIR
+    {"="*40}
+    Pair:                   {selected_label:>10}
+    Rank:                   {rank:>10}
+    Active-Day Sharpe:      {selected_row['sharpe']:>10.3f}
+    Trades:                 {int(selected_row['trades']):>10}
+    Best Z-Score:           {selected_row['best_entry_z']:>10.1f}
+"""
     stats_text = f"""
     PAIR SWEEP SUMMARY
     {"="*40}
 
     Total pairs tested:     {len(table):>10}
     Valid results:          {len(valid):>10}
-    Pairs with Sharpe > 0:  {(valid['sharpe'] > 0).sum():>10}
-    Pairs with Sharpe > 1:  {(valid['sharpe'] > 1).sum():>10}
+    Pairs with AD Sharpe > 0:{(valid['sharpe'] > 0).sum():>10}
+    Pairs with AD Sharpe > 1:{(valid['sharpe'] > 1).sum():>10}
 
-    SHARPE RATIO STATISTICS
+    ACTIVE-DAY SHARPE STATISTICS
     {"="*40}
     Mean:                   {valid['sharpe'].mean():>10.3f}
     Median:                 {valid['sharpe'].median():>10.3f}
@@ -230,16 +301,21 @@ def _plot_summary_stats(ax, table: pd.DataFrame, valid: pd.DataFrame) -> None:
     BEST PAIR
     {"="*40}
     Pair:                   {valid.iloc[0]['pair']:>10}
-    Sharpe:                 {valid.iloc[0]['sharpe']:>10.3f}
+    Active-Day Sharpe:      {valid.iloc[0]['sharpe']:>10.3f}
     Trades:                 {int(valid.iloc[0]['trades']):>10}
     Best Z-Score:           {valid.iloc[0]['best_entry_z']:>10.1f}
-    """
+{selected_text}    """
     ax.text(0.1, 0.95, stats_text, transform=ax.transAxes, fontsize=10,
             verticalalignment="top", fontfamily="monospace",
             bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
 
 
-def plot_summary(table: pd.DataFrame, output_dir: str, top_n: int = 15) -> None:
+def plot_summary(
+    table: pd.DataFrame,
+    output_dir: str,
+    top_n: int = 15,
+    selected_pair: tuple[str, str] | None = None,
+) -> None:
     """Generate summary visualization plots for pair sweep results."""
     os.makedirs(output_dir, exist_ok=True)
 
@@ -253,10 +329,10 @@ def plot_summary(table: pd.DataFrame, output_dir: str, top_n: int = 15) -> None:
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     fig.suptitle("Pair Sweep Summary", fontsize=14, fontweight="bold")
 
-    _plot_top_pairs_chart(axes[0, 0], valid, top_n)
-    _plot_sharpe_vs_trades(axes[0, 1], valid)
-    _plot_sharpe_distribution(axes[1, 0], valid)
-    _plot_summary_stats(axes[1, 1], table, valid)
+    _plot_top_pairs_chart(axes[0, 0], valid, top_n, selected_pair)
+    _plot_sharpe_vs_trades(axes[0, 1], valid, selected_pair)
+    _plot_sharpe_distribution(axes[1, 0], valid, selected_pair)
+    _plot_summary_stats(axes[1, 1], table, valid, selected_pair)
 
     plt.tight_layout()
     plot_path = os.path.join(output_dir, "pair_sweep_summary.png")
@@ -305,7 +381,7 @@ def _row_from_best(y_symbol: str, x_symbol: str, best: dict | None) -> dict:
 # ---------------------------------------------------------------------------
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Rank available symbol pairs by best Sharpe ratio."
+        description="Rank available symbol pairs by best active-day Sharpe ratio."
     )
     parser.add_argument(
         "--config",
@@ -395,14 +471,18 @@ def main() -> None:
                 if idx % 5 == 0 or idx == total:
                     print(f"Processed {idx}/{total} pairs. Latest: {y_symbol}/{x_symbol}")
 
-    # Print final results (sorted by Sharpe desc)
+    # Print final results (sorted by active-day Sharpe desc)
     table = build_results_table(rows)
     print_results_table(table)
 
     # Save results to CSV and generate summary plots
     output_dir = resolve_path(BASE_DIR, config.get("output_dir", "output"))
     save_results_csv(table, output_dir)
-    plot_summary(table, output_dir)
+    selected_pair = (
+        config.get("symbol_y", "LTC"),
+        config.get("symbol_x", "XRP"),
+    )
+    plot_summary(table, output_dir, selected_pair=selected_pair)
 
     # Best pair = top valid row of the Sharpe-sorted table.
     valid = table.dropna(subset=["sharpe"])
@@ -411,7 +491,10 @@ def main() -> None:
         best_y, best_x, best_z = top["symbol_y"], top["symbol_x"], top["best_entry_z"]
         name = f"{best_y}_{best_x}_z{best_z}"
         show_plot = bool(config.get("show_plot", True))
-        print(f"Best pair: {best_y}/{best_x} z={best_z} sharpe={top['sharpe']:.4f}")
+        print(
+            f"Best pair: {best_y}/{best_x} z={best_z} "
+            f"active_day_sharpe={top['sharpe']:.4f}"
+        )
 
         best_results = load_best_results(best_y, best_x, best_z, config, cache_dir)
         plot_equity(best_results, output_dir, name, show_plot)

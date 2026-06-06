@@ -1,8 +1,9 @@
 # freqtrade_live — Jansen LTC/XRP pair trade (dry-run)
 
 A live (dry-run) freqtrade deployment of the Kalman-filter pairs-trading strategy
-from `../jansen_backtest.py`, on the **LTC/XRP** pair — the sweep's #1 pair
-(Sharpe ≈ 0.69, `entry_z = 2.0`). Runs in Docker like the other freqtrade
+from `../jansen_backtest.py`, on the **LTC/XRP** pair -- now the sweep's #2 pair
+under active-day Sharpe (1.46, 365-day annualized, `entry_z = 2.0`). Runs in
+Docker like the other freqtrade
 projects in this tree (`FLAGS_100pairs_HYPE_REAL`, `ADVANCED_MM_HL`, …).
 
 ## What it does
