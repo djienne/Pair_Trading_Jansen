@@ -300,10 +300,16 @@ class PairTradingJansen(IStrategy):
             return None
 
         # --- 3) Combined spread stop (both legs present) -------------------------
+        # BOTH legs are priced at the last analyzed daily close -- reproducing the
+        # backtest's once-per-day close-based risk check (jansen_backtest.py
+        # L391-399). Mixing this leg's live tick with the sibling's day-old close
+        # would register a joint intraday move (both alts crashing/rallying
+        # together) as one-leg PnL and falsely trip the stop on a healthy hedge;
+        # `current_rate` is therefore deliberately NOT used here.
         total_pnl = 0.0
         total_gross = 0.0
         for t in legs:
-            price = current_rate if t.pair == pair else self._last_close(t.pair)
+            price = self._last_close(t.pair)
             if not price:
                 return None
             direction = -1.0 if t.is_short else 1.0
