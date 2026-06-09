@@ -60,6 +60,7 @@ from datetime import timedelta
 import numpy as np
 from pandas import DataFrame
 
+from freqtrade.enums import RunMode
 from freqtrade.strategy import IStrategy
 from freqtrade.persistence import Trade
 
@@ -191,6 +192,27 @@ class PairTradingJansen(IStrategy):
         )
         dataframe["hr"] = dataframe["date"].map(sig["hr"])
         dataframe["z"] = dataframe["date"].map(sig["z"])
+
+        # Operator visibility (live/dry-run, logged once via the lead pair): if
+        # the latest bar carries no governed z while the state machine says a
+        # position may be held, the signal is frozen (two consecutive failed
+        # cohorts, or a data gap). The coupled zero-cross exit cannot fire on
+        # NaN z; only the spread stop and the liquidation guard remain active
+        # until a cohort passes its gates again.
+        if (
+            metadata.get("pair") == self.lead_pair
+            and self.dp.runmode in (RunMode.LIVE, RunMode.DRY_RUN)
+            and len(dataframe)
+            and not np.isfinite(dataframe["z"].iloc[-1])
+            and dataframe["pair_state"].iloc[-1] != 0
+        ):
+            logger.warning(
+                "Signal freeze: latest bar (%s) has no governed z while the "
+                "spread state is %s; coupled exits inactive, spread stop and "
+                "liquidation guard remain.",
+                dataframe["date"].iloc[-1],
+                dataframe["pair_state"].iloc[-1],
+            )
         return dataframe
 
     # ----------------------------------------------------------------------- #
