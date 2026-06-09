@@ -90,6 +90,14 @@ class PairTradingJansen(IStrategy):
     }
     target_capital_ratio = 0.95  # fraction of available capital deployed gross
     orphan_grace_seconds = 180   # don't force-close a lone leg during the entry handshake
+    # Per-leg liquidation guard (live-only; the backtest assumes cross-netting and
+    # has no liquidation concept): with isolated 1x margin a big JOINT rally can
+    # liquidate the short leg on-exchange while the combined spread PnL stays ~flat
+    # (so the spread stop never fires). Close the whole book once any single leg
+    # moves this far against itself. Binance 1x isolated short liquidation sits
+    # around +96-99% adverse (maintenance-margin tiers), so 0.60 leaves ample
+    # gap-risk margin and should essentially never fire.
+    liq_guard_adverse = 0.60
 
     # --- freqtrade mechanics ------------------------------------------------
     timeframe = "1d"
@@ -324,6 +332,7 @@ class PairTradingJansen(IStrategy):
         # `current_rate` is therefore deliberately NOT used here.
         total_pnl = 0.0
         total_gross = 0.0
+        max_adverse = 0.0
         for t in legs:
             price = self._last_close(t.pair)
             if not price:
@@ -331,9 +340,24 @@ class PairTradingJansen(IStrategy):
             direction = -1.0 if t.is_short else 1.0
             total_pnl += direction * (price - t.open_rate) * t.amount
             total_gross += abs(t.open_rate * t.amount)
+            leg_ret = price / t.open_rate - 1.0
+            max_adverse = max(max_adverse, leg_ret if t.is_short else -leg_ret)
 
         if total_gross > 0 and (total_pnl / total_gross) < self.risk_limit:
             return "spread_stop"
+
+        # --- 4) Per-leg liquidation guard (see liq_guard_adverse) -----------------
+        # Both legs evaluate the same last-close data in the same iteration, so the
+        # exit is symmetric (the second-processed leg may get tagged "orphan_close"
+        # once its sibling's exit is committed -- same-iteration book closure either
+        # way, mirroring the spread-stop note above).
+        if max_adverse >= self.liq_guard_adverse:
+            logger.warning(
+                "Liquidation guard for %s: a leg is %.0f%% adverse vs entry while the "
+                "spread PnL has not tripped the stop; closing the book to avoid an "
+                "exchange liquidation of one leg.", pair, 100.0 * max_adverse,
+            )
+            return "leg_liq_guard"
         return None
 
     def _entered_spread_dir(self, trade: Trade) -> int:
