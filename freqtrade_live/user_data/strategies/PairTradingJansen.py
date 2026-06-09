@@ -174,7 +174,13 @@ class PairTradingJansen(IStrategy):
         )
 
         # Map the date-indexed signal back onto this pair's (date-keyed) rows.
-        dataframe["pair_state"] = dataframe["date"].map(sig["state"]).fillna(0.0)
+        # Dates missing from the two-leg common index (e.g. the sibling lacks a
+        # candle) carry the held state forward -- the same NaN-carry semantics as
+        # _state_from_z -- instead of snapping to 0, which would fabricate a state
+        # transition: a phantom exit plus a fake re-entry "crossing" on resume.
+        dataframe["pair_state"] = (
+            dataframe["date"].map(sig["state"]).ffill().fillna(0.0)
+        )
         dataframe["hr"] = dataframe["date"].map(sig["hr"])
         dataframe["z"] = dataframe["date"].map(sig["z"])
         return dataframe
@@ -261,20 +267,30 @@ class PairTradingJansen(IStrategy):
         # All exits are decided HERE (populate_exit_trend is a no-op) so the two legs
         # always act on ONE shared spread state and can never orphan.
 
-        # --- 1) Shared-state coupled exit (the primary exit) ---------------------
-        # Both legs read the SAME source of truth -- the lead pair's pair_state -- so
-        # they exit on the same candle (no per-leg recompute divergence). Exit when the
-        # spread has reverted to flat (0) or flipped against the entered direction. This
-        # is checked FIRST so that, when the signal reverts, BOTH legs are tagged
+        # --- 1) Coupled zero-cross exit (the primary exit) ------------------------
+        # The literal backtest exit rule, evaluated per entered direction: a held
+        # long-spread exits when z >= 0, a held short-spread when z <= 0 (the
+        # backtest's cross-zero events / _state_from_z's exit branches). Both legs
+        # read the SAME source of truth -- the lead pair's current z -- so they exit
+        # on the same iteration (no per-leg recompute divergence). This is checked
+        # FIRST so that, when the signal reverts, BOTH legs are tagged
         # "spread_revert" (rather than the second-processed leg being mislabelled an
         # orphan just because its sibling's exit was committed a step earlier).
-        shared_state = self._last_value(self.lead_pair, "pair_state")
+        #
+        # Deliberately NOT the reconstructed `pair_state`: live runs on a rolling
+        # ~999-candle window while each cohort needs a 730d lookback, so only the
+        # most recent ~270 days carry governed z. A position held longer than that
+        # has its entry crossing fall off the window -- the recomputed state
+        # collapses to 0 and a state-based exit would fire a phantom "spread_revert"
+        # while |z| is still far from zero (same fragility across bot restarts). The
+        # direct z test needs no state history; a flip beyond the opposite threshold
+        # has necessarily crossed zero, so flips are covered too. NaN/missing z
+        # (warm-up, skipped cohort) holds the position, matching the backtest, with
+        # the spread stop below still active.
+        z = self._last_value(self.lead_pair, "z")
         entered_dir = self._entered_spread_dir(trade)
-        if (
-            shared_state is not None
-            and np.isfinite(shared_state)
-            and entered_dir != 0
-            and int(round(shared_state)) != entered_dir
+        if z is not None and (
+            (entered_dir == 1 and z >= 0.0) or (entered_dir == -1 and z <= 0.0)
         ):
             return "spread_revert"
 
