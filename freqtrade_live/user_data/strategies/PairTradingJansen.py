@@ -242,23 +242,55 @@ class PairTradingJansen(IStrategy):
 
         py = self._last_close(self.lead_pair)   # LTC price
         px = self._last_close(self.lag_pair)    # XRP price
-        hr = self._last_value(self.lead_pair, "hr")
+        hr = self._tradable_hr()
 
-        if not (py and px and hr is not None and np.isfinite(hr) and abs(hr) > 1e-12):
-            # Fall back to an even split if the hedge ratio is unavailable.
-            stake = target / 2.0
+        if not (py and px and hr is not None):
+            # No usable hedge ratio / prices -> refuse the entry rather than open
+            # an unhedged 50/50 book. The backtest skips these entries entirely
+            # (compute_position_sizes returns (0, 0) for a non-finite/zero hr and
+            # zero-size entries are dropped, jansen_backtest.py L307-311, L456).
+            # A falsy stake aborts the entry in freqtrade; return BEFORE the
+            # min_stake clamp so the 0 cannot be resurrected by max(stake, min).
+            # confirm_trade_entry() vetoes the same condition as the primary gate.
+            logger.warning(
+                "Refusing entry stake for %s: no tradable hedge ratio/prices "
+                "(py=%s, px=%s, hr=%s).", pair, py, px, hr,
+            )
+            return 0.0
+
+        gross_per_unit = py + abs(hr) * px
+        if pair == self.lead_pair:
+            stake = target * py / gross_per_unit
         else:
-            gross_per_unit = py + abs(hr) * px
-            if pair == self.lead_pair:
-                stake = target * py / gross_per_unit
-            else:
-                stake = target * abs(hr) * px / gross_per_unit
+            stake = target * abs(hr) * px / gross_per_unit
 
         if max_stake:
             stake = min(stake, max_stake)
         if min_stake:
             stake = max(stake, min_stake)
         return float(stake)
+
+    def confirm_trade_entry(
+        self, pair, order_type, amount, rate, time_in_force, current_time,
+        entry_tag, side, **kwargs,
+    ) -> bool:
+        # Authoritative entry veto, run right before each leg's order is placed:
+        # no tradable hedge ratio -> no trade (see _tradable_hr for the backtest
+        # mapping). Both legs read the same analyzed lead-pair hr in the same
+        # iteration, so the veto is symmetric -- both legs or neither. This also
+        # guards the path where custom_stake_amount *raising* would make
+        # freqtrade fall back to the unhedged proposed_stake
+        # (strategy_safe_wrapper default_retval). While the signal candle stays
+        # current, live re-attempts the entry each throttle iteration, so the
+        # warning may repeat -- acceptable for an anomaly that should never occur
+        # (hr was strictly negative on every governed day of LTC/XRP history).
+        if self._tradable_hr() is None:
+            logger.warning(
+                "Vetoing %s entry for %s: hedge ratio missing, ~zero, or positive.",
+                side, pair,
+            )
+            return False
+        return True
 
     def leverage(
         self, pair, current_time, current_rate, proposed_leverage, max_leverage,
@@ -372,6 +404,24 @@ class PairTradingJansen(IStrategy):
         if trade.pair == self.lag_pair:
             return 1 if trade.is_short else -1
         return 0
+
+    def _tradable_hr(self) -> float | None:
+        """Hedge ratio from the lead pair's analyzed dataframe, or ``None`` when
+        the spread is not tradable with the two-leg opposite mapping.
+
+        Mirrors the backtest's entry skip: ``compute_position_sizes`` returns
+        ``(0, 0)`` for a non-finite/zero hr (jansen_backtest.py L307-311) and
+        zero-size entries are dropped (L456). Additionally vetoes ``hr > 0``:
+        there the backtest holds SAME-direction legs (``size_x = side*k*hr``,
+        L314), which the live opposite-leg mapping cannot represent -- entering
+        would put the lag leg on the wrong side. Empirically hr stayed in
+        [-103, -18] over 1525 governed days (never >= 0), so this is a guard,
+        not an expected path.
+        """
+        hr = self._last_value(self.lead_pair, "hr")
+        if hr is None or not np.isfinite(hr) or abs(hr) <= 1e-12 or hr > 0:
+            return None
+        return float(hr)
 
     # ----------------------------------------------------------------------- #
     # Small DataProvider helpers
