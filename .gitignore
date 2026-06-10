@@ -33,3 +33,6 @@ output/
 
 # Copyrighted materials
 pair_trading_in_practice.pdf
+
+# Generated bundle (see bundle_code.py)
+code_bundle.md
