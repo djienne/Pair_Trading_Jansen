@@ -51,12 +51,35 @@ crossing entries, compounding sizing) but **by design**:
   **overlapping cohorts** (two simultaneous positions on ~121 of 732 backtest
   days);
 - has **no 3-month entry-window gate** and **no 6-month forced window close**;
-- is anchored to "now", not retrospective.
+- is anchored to "now", not retrospective;
+- **fills one bar earlier**: both decide from the same z[t], but live fills at
+  ~open[t+1] (seconds after the daily close, ≈ close[t]) while the backtest's
+  `z_signal = z.shift(1)` fills at close[t+1]. `verify_fidelity.py` quantifies
+  it: shifting the live state one bar drops the sign disagreement from 23.2%
+  to 15.9% and the opposite-sign days from 4 to 0;
+- **re-enters after a stop** only on z reverting through zero plus a fresh
+  ±entry_z crossing; the backtest can re-enter on a mere threshold re-cross
+  inside its 3-month entry window;
+- deploys **95% of equity** (`target_capital_ratio`, head-room for fees and
+  rounding) vs the backtest's 100%;
+- pays **perp funding** on both legs — not modeled by the backtest. The
+  gross-neutral book pays the half-difference of the per-leg rates (~0.1%/yr
+  full-sample, ~1%/yr over the last year; `verify_fidelity.py` prints the
+  current numbers);
+- runs **isolated 1× margin**, so a large *joint* rally could liquidate the
+  short leg on-exchange while spread PnL is ~flat — liquidation doesn't exist
+  in the backtest. Mitigated by the `leg_liq_guard` exit (any leg 60% adverse
+  from entry, well inside Binance's ~96-99% liquidation distance);
+- manages **dead quarters** (a cohort failing the half-life gate) under the
+  *previous* cohort's calibration — the backtest's months-4-6 coverage. Never
+  triggered in LTC/XRP history to date.
 
 So the live equity path will not match the backtest one-for-one (most of the
 difference concentrates on the overlap days). **Use `jansen_backtest.py` for
-performance numbers** — this folder is the live trader. `verify_fidelity.py`
-quantifies the remaining signal-level divergence on the local data.
+performance numbers** — this folder is the live trader; the docker backtest in
+`commands.txt` is a wiring check only. `verify_fidelity.py` quantifies the
+remaining signal-level divergence on the local data and prints regression
+guards (hr-sign, dead quarters, funding drag).
 
 ## Layout
 

@@ -30,6 +30,20 @@ Pair-ranking summary across all tested pairs:
 
 <img src="output/pair_sweep_summary.png" width="640" alt="Pair sweep summary showing top pairs by active-day Sharpe ratio" />
 
+## Live trader vs research backtest
+
+`freqtrade_live/` deploys the LTC/XRP pair as a live (dry-run) freqtrade bot.
+The signal math is a faithful port of `jansen_backtest.py` (hedge-ratio and
+z-score diff medians of 0.0000 on the days both publish), but the execution
+layer necessarily differs: the backtest is retrospective and holds overlapping
+quarterly cohorts, while the bot is anchored to "now", holds a single spread
+position, and fills one bar earlier than the backtest's `close[t+1]`
+convention. **Use this folder's scripts for performance numbers; use the bot
+for trading.** The full divergence list lives in
+[`freqtrade_live/README.md`](freqtrade_live/README.md), and
+`freqtrade_live/verify_fidelity.py` quantifies the signal-level agreement and
+regression guards against the local data.
+
 ## Scripts
 
 ### 1. `jansen_backtest.py`

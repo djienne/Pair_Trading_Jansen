@@ -213,9 +213,15 @@ def compute_state_signal(
     All columns are strictly causal (value at t uses only data <= t): the Kalman
     ``filter`` is a forward pass, the half-life uses only the lookback portion
     (strictly before every governed bar), and the z-window is trailing. No
-    explicit ``shift(1)`` is applied -- freqtrade executes a signal on the next
-    candle, which already reproduces the backtest's one-bar ``z_signal`` lag
-    (backtest L604); shifting here as well would double-lag.
+    explicit ``shift(1)`` is applied -- freqtrade acts on the candle after the
+    signal candle, so the INFORMATION timing already matches the backtest's
+    one-bar ``z_signal`` lag (backtest L604-605): both decide from z[t].
+    Shifting here as well would double-lag the decision. Fill PRICES still
+    differ by one bar, though: live fills at ~open[t+1] (seconds after the
+    daily close, so ~close[t]) while the backtest fills at close[t+1] -- one
+    day later. That residual fill-convention offset is quantified by
+    ``verify_fidelity.py``'s shift-1 diagnostic (sign disagreement 23.2% ->
+    15.9%, opposite-sign days 4 -> 0 once both sides sit on the same fill day).
     """
     idx = lead_close.index
     out = pd.DataFrame(

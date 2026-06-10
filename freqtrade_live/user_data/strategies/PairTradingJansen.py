@@ -43,8 +43,32 @@ but, by design:
   * holds ONE spread position; it cannot represent the backtest's overlapping
     cohorts (two simultaneous positions on ~121 of 732 backtest days);
   * has no 3-month entry-window gate and no 6-month forced window close;
-  * is anchored to "now", not retrospective.
+  * is anchored to "now", not retrospective;
+  * fills ONE BAR EARLIER: both decide from z[t], but live fills at ~open[t+1]
+    (seconds after the daily close, ~close[t]) while the backtest's
+    ``z_signal = z.shift(1)`` fills at close[t+1]. verify_fidelity.py
+    quantifies it: shifting the live state one bar drops the sign
+    disagreement 23.2% -> 15.9% and opposite-sign days 4 -> 0;
+  * re-enters after a stop only on z reverting through zero plus a fresh
+    +-entry_z crossing; the backtest can re-enter on a mere threshold
+    re-cross inside its 3-month entry window;
+  * deploys ``target_capital_ratio = 0.95`` of equity (head-room for fees /
+    rounding) vs the backtest's 100%;
+  * pays perp FUNDING on both legs -- not modeled by the backtest. The
+    gross-neutral book pays the half-difference of the per-leg rates
+    (~0.1%/yr full-sample, ~1%/yr over the last year; see
+    verify_fidelity.py's funding diagnostic);
+  * runs ISOLATED 1x margin, so a big joint rally can liquidate the short
+    leg on-exchange while spread PnL is ~flat -- liquidation does not exist
+    in the backtest. Mitigated by the ``leg_liq_guard`` exit (any leg 60%
+    adverse from entry, well inside Binance's ~96-99% liq distance);
+  * manages DEAD QUARTERS (failed half-life gate) under the previous
+    cohort's calibration -- the backtest's months-4-6 coverage (see
+    jansen_signals.compute_state_signal). Never triggered in LTC/XRP
+    history to date.
 Use ``jansen_backtest.py`` for performance numbers; this bot is the live trader.
+The freqtrade docker backtest (commands.txt) is a WIRING check only -- it proves
+the two-leg signal/exit plumbing end-to-end, not the strategy's edge.
 
 Switching dry-run -> real money, or Binance -> Hyperliquid, is purely a config
 change; this strategy file is unchanged.
