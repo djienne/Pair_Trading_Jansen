@@ -89,6 +89,8 @@ freqtrade_live/
 │                                 # (compose project name: pair_ltc_xrp_jansen)
 ├── Dockerfile.technical         # adds pykalman
 ├── commands.txt                 # copy-paste cheatsheet
+├── show_PnL.py                  # host-side PnL/performance table (reads docker ps + the API)
+├── verify_fidelity.py           # signal-level live-vs-backtest fidelity + regression guards
 └── user_data/
     ├── config.json              # Binance USDT-M futures, dry_run, both legs
     ├── config_hyperliquid.json  # Hyperliquid USDC variant (fill wallet creds)
@@ -113,6 +115,21 @@ docker compose logs -f                    # watch it compute z and open legs
 
 API/UI: `http://127.0.0.1:3012` (user `david`, password `lolalola` — change in
 `config.json`). See `commands.txt` for backtest + management commands.
+
+### Check PnL / performance
+
+From this folder on the **host** (needs `pip install requests`):
+
+```bash
+python show_PnL.py
+```
+
+prints a color-coded table for the `PAIR_LTC_XRP` container — trades, PnL
+(all/closed), win rate, profit factor, Sharpe, max drawdown, days live and CAGR
+— reading the API credentials straight from `config.json`. With no open trades
+it shows `0` trades / `0.00%`: the strategy only enters on a fresh ±2 z-crossing,
+so a bot that booted mid-episode (state already ±1) correctly sits flat until the
+next crossing.
 
 ## Why Binance futures (not Hyperliquid) for now
 

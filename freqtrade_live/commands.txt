@@ -26,6 +26,11 @@ docker compose logs -f
 docker compose ps
 docker compose down
 
+# 5) Performance snapshot (host-side; needs `pip install requests`).
+#    Prints PnL / win rate / Sharpe / drawdown for the PAIR_LTC_XRP container,
+#    reading the API credentials from user_data/config.json.
+python show_PnL.py
+
 # ---------------------------------------------------------------------------
 # Hyperliquid variant (after filling wallet creds in config_hyperliquid.json):
 #   download-data: --exchange hyperliquid, pairs LTC/USDC:USDC XRP/USDC:USDC
