@@ -18,6 +18,18 @@ Sharpe ratios in the sweep outputs are computed from active return days only (da
 
 ## Example Output
 
+> **Provenance — as of 2026-06-06.** The Sharpe / return figures below are read
+> from `output/pair_rankings.csv`, written by `pair_sweep.py` on 2026-06-06
+> 06:25 UTC (LTC/XRP: `sharpe=1.464036`, `final_equity=2863.75`; ADA/SOL:
+> `sharpe=1.555202`, `final_equity=2193.51`; both at `best_entry_z=2.0`, against
+> `start_equity = 1000` — hence +186% and +119%). The max-drawdown figures come
+> from the equity plots in the same folder (`output/equity_*_z2.0.png`, written
+> 2026-06-06 06:37 UTC); drawdown is not a column in the CSV. The sweep ran on
+> the local daily Binance USDⓈ-M futures data in `data/feather` (downloaded
+> 2026-06-04), whose candles run from 2020 to 2026-06-03. Re-run
+> `python pair_sweep.py --workers 8` to refresh — the rankings move with the
+> data.
+
 Kept/default pair from the refreshed sweep -- **LTC/XRP** (`entry_z = 2.0`): **+186%** over 2020-2026, **active-day Sharpe 1.46** (365-day annualized), **max drawdown -27%** (net of 0.1% fees). It ranks #2 under the new active-day Sharpe metric.
 
 <img src="output/equity_LTC_XRP_z2.0.png" width="760" alt="LTC/XRP pairs-trade equity curve (entry_z=2.0): +186%, active-day Sharpe 1.46, max drawdown -27%" />

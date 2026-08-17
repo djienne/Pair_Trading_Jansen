@@ -85,7 +85,7 @@ guards (hr-sign, dead quarters, funding drag).
 
 ```
 freqtrade_live/
-├── docker-compose.yml           # freqtradeorg/freqtrade:2025.9, API on 127.0.0.1:3012
+├── docker-compose.yml           # freqtradeorg/freqtrade:2025.10, API on 127.0.0.1:3012
 │                                 # (compose project name: pair_ltc_xrp_jansen)
 ├── Dockerfile.technical         # adds pykalman
 ├── commands.txt                 # copy-paste cheatsheet
