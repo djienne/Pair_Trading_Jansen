@@ -4,7 +4,7 @@
 name: pair_ltc_xrp_jansen
 services:
   freqtrade:
-    image: freqtradeorg/freqtrade:2025.9
+    image: ft-pair_trading_jansen-freqtrade_live:2025.10
     # Build step adds pykalman (see Dockerfile.technical)
     build:
       context: .
@@ -19,7 +19,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.0'
+          # Standard single-container freqtrade bot (freqai disabled, normal
+          # 500-candle data handling; pykalman is the only extra dep), so it
+          # gets the same 0.1 CPU / 1G envelope as every other plain strategy.
+          cpus: '0.1'
           memory: '1024M'
     # Default command used when running `docker compose up`.
     # Dry-run on Binance futures. To run the Hyperliquid variant instead, point
